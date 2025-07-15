@@ -1,0 +1,289 @@
+2025-02-20 19:21:53 INFO Retry attempt failed:
+Traceback (most recent call last):
+  File "/home/lzm/conda_envs/4dvla_diff/lib/python3.10/site-packages/urllib3/connection.py", line 199, in _new_conn
+    sock = connection.create_connection(
+  File "/home/lzm/conda_envs/4dvla_diff/lib/python3.10/site-packages/urllib3/util/connection.py", line 85, in create_connection
+    raise err
+  File "/home/lzm/conda_envs/4dvla_diff/lib/python3.10/site-packages/urllib3/util/connection.py", line 73, in create_connection
+    sock.connect(sa)
+ConnectionRefusedError: [Errno 111] Connection refused
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/home/lzm/conda_envs/4dvla_diff/lib/python3.10/site-packages/urllib3/connectionpool.py", line 775, in urlopen
+    self._prepare_proxy(conn)
+  File "/home/lzm/conda_envs/4dvla_diff/lib/python3.10/site-packages/urllib3/connectionpool.py", line 1044, in _prepare_proxy
+    conn.connect()
+  File "/home/lzm/conda_envs/4dvla_diff/lib/python3.10/site-packages/urllib3/connection.py", line 693, in connect
+    self.sock = sock = self._new_conn()
+  File "/home/lzm/conda_envs/4dvla_diff/lib/python3.10/site-packages/urllib3/connection.py", line 214, in _new_conn
+    raise NewConnectionError(
+urllib3.exceptions.NewConnectionError: <urllib3.connection.HTTPSConnection object at 0x7fc1bcf33b20>: Failed to establish a new connection: [Errno 111] Connection refused
+
+The above exception was the direct cause of the following exception:
+
+urllib3.exceptions.ProxyError: ('Unable to connect to proxy', NewConnectionError('<urllib3.connection.HTTPSConnection object at 0x7fc1bcf33b20>: Failed to establish a new connection: [Errno 111] Connection refused'))
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/home/lzm/conda_envs/4dvla_diff/lib/python3.10/site-packages/requests/adapters.py", line 667, in send
+    resp = conn.urlopen(
+  File "/home/lzm/conda_envs/4dvla_diff/lib/python3.10/site-packages/urllib3/connectionpool.py", line 843, in urlopen
+    retries = retries.increment(
+  File "/home/lzm/conda_envs/4dvla_diff/lib/python3.10/site-packages/urllib3/util/retry.py", line 519, in increment
+    raise MaxRetryError(_pool, url, reason) from reason  # type: ignore[arg-type]
+urllib3.exceptions.MaxRetryError: HTTPSConnectionPool(host='api.wandb.ai', port=443): Max retries exceeded with url: /graphql (Caused by ProxyError('Unable to connect to proxy', NewConnectionError('<urllib3.connection.HTTPSConnection object at 0x7fc1bcf33b20>: Failed to establish a new connection: [Errno 111] Connection refused')))
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/home/lzm/conda_envs/4dvla_diff/lib/python3.10/site-packages/wandb/sdk/lib/retry.py", line 131, in __call__
+    result = self._call_fn(*args, **kwargs)
+  File "/home/lzm/conda_envs/4dvla_diff/lib/python3.10/site-packages/wandb/sdk/internal/internal_api.py", line 393, in execute
+    return self.client.execute(*args, **kwargs)  # type: ignore
+  File "/home/lzm/conda_envs/4dvla_diff/lib/python3.10/site-packages/wandb/vendor/gql-0.2.0/wandb_gql/client.py", line 52, in execute
+    result = self._get_result(document, *args, **kwargs)
+  File "/home/lzm/conda_envs/4dvla_diff/lib/python3.10/site-packages/wandb/vendor/gql-0.2.0/wandb_gql/client.py", line 60, in _get_result
+    return self.transport.execute(document, *args, **kwargs)
+  File "/home/lzm/conda_envs/4dvla_diff/lib/python3.10/site-packages/wandb/sdk/lib/gql_request.py", line 58, in execute
+    request = self.session.post(self.url, **post_args)
+  File "/home/lzm/conda_envs/4dvla_diff/lib/python3.10/site-packages/requests/sessions.py", line 637, in post
+    return self.request("POST", url, data=data, json=json, **kwargs)
+  File "/home/lzm/conda_envs/4dvla_diff/lib/python3.10/site-packages/requests/sessions.py", line 589, in request
+    resp = self.send(prep, **send_kwargs)
+  File "/home/lzm/conda_envs/4dvla_diff/lib/python3.10/site-packages/requests/sessions.py", line 703, in send
+    r = adapter.send(request, **kwargs)
+  File "/home/lzm/conda_envs/4dvla_diff/lib/python3.10/site-packages/requests/adapters.py", line 694, in send
+    raise ProxyError(e, request=request)
+requests.exceptions.ProxyError: HTTPSConnectionPool(host='api.wandb.ai', port=443): Max retries exceeded with url: /graphql (Caused by ProxyError('Unable to connect to proxy', NewConnectionError('<urllib3.connection.HTTPSConnection object at 0x7fc1bcf33b20>: Failed to establish a new connection: [Errno 111] Connection refused')))
+2025-02-20 19:22:18 INFO Retry attempt failed:
+Traceback (most recent call last):
+  File "/home/lzm/conda_envs/4dvla_diff/lib/python3.10/site-packages/urllib3/connection.py", line 199, in _new_conn
+    sock = connection.create_connection(
+  File "/home/lzm/conda_envs/4dvla_diff/lib/python3.10/site-packages/urllib3/util/connection.py", line 85, in create_connection
+    raise err
+  File "/home/lzm/conda_envs/4dvla_diff/lib/python3.10/site-packages/urllib3/util/connection.py", line 73, in create_connection
+    sock.connect(sa)
+ConnectionRefusedError: [Errno 111] Connection refused
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/home/lzm/conda_envs/4dvla_diff/lib/python3.10/site-packages/urllib3/connectionpool.py", line 775, in urlopen
+    self._prepare_proxy(conn)
+  File "/home/lzm/conda_envs/4dvla_diff/lib/python3.10/site-packages/urllib3/connectionpool.py", line 1044, in _prepare_proxy
+    conn.connect()
+  File "/home/lzm/conda_envs/4dvla_diff/lib/python3.10/site-packages/urllib3/connection.py", line 693, in connect
+    self.sock = sock = self._new_conn()
+  File "/home/lzm/conda_envs/4dvla_diff/lib/python3.10/site-packages/urllib3/connection.py", line 214, in _new_conn
+    raise NewConnectionError(
+urllib3.exceptions.NewConnectionError: <urllib3.connection.HTTPSConnection object at 0x7f7dceddfb20>: Failed to establish a new connection: [Errno 111] Connection refused
+
+The above exception was the direct cause of the following exception:
+
+urllib3.exceptions.ProxyError: ('Unable to connect to proxy', NewConnectionError('<urllib3.connection.HTTPSConnection object at 0x7f7dceddfb20>: Failed to establish a new connection: [Errno 111] Connection refused'))
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/home/lzm/conda_envs/4dvla_diff/lib/python3.10/site-packages/requests/adapters.py", line 667, in send
+    resp = conn.urlopen(
+  File "/home/lzm/conda_envs/4dvla_diff/lib/python3.10/site-packages/urllib3/connectionpool.py", line 843, in urlopen
+    retries = retries.increment(
+  File "/home/lzm/conda_envs/4dvla_diff/lib/python3.10/site-packages/urllib3/util/retry.py", line 519, in increment
+    raise MaxRetryError(_pool, url, reason) from reason  # type: ignore[arg-type]
+urllib3.exceptions.MaxRetryError: HTTPSConnectionPool(host='api.wandb.ai', port=443): Max retries exceeded with url: /graphql (Caused by ProxyError('Unable to connect to proxy', NewConnectionError('<urllib3.connection.HTTPSConnection object at 0x7f7dceddfb20>: Failed to establish a new connection: [Errno 111] Connection refused')))
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/home/lzm/conda_envs/4dvla_diff/lib/python3.10/site-packages/wandb/sdk/lib/retry.py", line 131, in __call__
+    result = self._call_fn(*args, **kwargs)
+  File "/home/lzm/conda_envs/4dvla_diff/lib/python3.10/site-packages/wandb/sdk/internal/internal_api.py", line 393, in execute
+    return self.client.execute(*args, **kwargs)  # type: ignore
+  File "/home/lzm/conda_envs/4dvla_diff/lib/python3.10/site-packages/wandb/vendor/gql-0.2.0/wandb_gql/client.py", line 52, in execute
+    result = self._get_result(document, *args, **kwargs)
+  File "/home/lzm/conda_envs/4dvla_diff/lib/python3.10/site-packages/wandb/vendor/gql-0.2.0/wandb_gql/client.py", line 60, in _get_result
+    return self.transport.execute(document, *args, **kwargs)
+  File "/home/lzm/conda_envs/4dvla_diff/lib/python3.10/site-packages/wandb/sdk/lib/gql_request.py", line 58, in execute
+    request = self.session.post(self.url, **post_args)
+  File "/home/lzm/conda_envs/4dvla_diff/lib/python3.10/site-packages/requests/sessions.py", line 637, in post
+    return self.request("POST", url, data=data, json=json, **kwargs)
+  File "/home/lzm/conda_envs/4dvla_diff/lib/python3.10/site-packages/requests/sessions.py", line 589, in request
+    resp = self.send(prep, **send_kwargs)
+  File "/home/lzm/conda_envs/4dvla_diff/lib/python3.10/site-packages/requests/sessions.py", line 703, in send
+    r = adapter.send(request, **kwargs)
+  File "/home/lzm/conda_envs/4dvla_diff/lib/python3.10/site-packages/requests/adapters.py", line 694, in send
+    raise ProxyError(e, request=request)
+requests.exceptions.ProxyError: HTTPSConnectionPool(host='api.wandb.ai', port=443): Max retries exceeded with url: /graphql (Caused by ProxyError('Unable to connect to proxy', NewConnectionError('<urllib3.connection.HTTPSConnection object at 0x7f7dceddfb20>: Failed to establish a new connection: [Errno 111] Connection refused')))
+2025-02-21 10:26:44 INFO Retry attempt failed:
+Traceback (most recent call last):
+  File "/home/lzm/conda_envs/4dvla_diff/lib/python3.10/site-packages/urllib3/connection.py", line 199, in _new_conn
+    sock = connection.create_connection(
+  File "/home/lzm/conda_envs/4dvla_diff/lib/python3.10/site-packages/urllib3/util/connection.py", line 85, in create_connection
+    raise err
+  File "/home/lzm/conda_envs/4dvla_diff/lib/python3.10/site-packages/urllib3/util/connection.py", line 73, in create_connection
+    sock.connect(sa)
+ConnectionRefusedError: [Errno 111] Connection refused
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/home/lzm/conda_envs/4dvla_diff/lib/python3.10/site-packages/urllib3/connectionpool.py", line 775, in urlopen
+    self._prepare_proxy(conn)
+  File "/home/lzm/conda_envs/4dvla_diff/lib/python3.10/site-packages/urllib3/connectionpool.py", line 1044, in _prepare_proxy
+    conn.connect()
+  File "/home/lzm/conda_envs/4dvla_diff/lib/python3.10/site-packages/urllib3/connection.py", line 693, in connect
+    self.sock = sock = self._new_conn()
+  File "/home/lzm/conda_envs/4dvla_diff/lib/python3.10/site-packages/urllib3/connection.py", line 214, in _new_conn
+    raise NewConnectionError(
+urllib3.exceptions.NewConnectionError: <urllib3.connection.HTTPSConnection object at 0x7f1c775c0250>: Failed to establish a new connection: [Errno 111] Connection refused
+
+The above exception was the direct cause of the following exception:
+
+urllib3.exceptions.ProxyError: ('Unable to connect to proxy', NewConnectionError('<urllib3.connection.HTTPSConnection object at 0x7f1c775c0250>: Failed to establish a new connection: [Errno 111] Connection refused'))
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/home/lzm/conda_envs/4dvla_diff/lib/python3.10/site-packages/requests/adapters.py", line 667, in send
+    resp = conn.urlopen(
+  File "/home/lzm/conda_envs/4dvla_diff/lib/python3.10/site-packages/urllib3/connectionpool.py", line 843, in urlopen
+    retries = retries.increment(
+  File "/home/lzm/conda_envs/4dvla_diff/lib/python3.10/site-packages/urllib3/util/retry.py", line 519, in increment
+    raise MaxRetryError(_pool, url, reason) from reason  # type: ignore[arg-type]
+urllib3.exceptions.MaxRetryError: HTTPSConnectionPool(host='api.wandb.ai', port=443): Max retries exceeded with url: /graphql (Caused by ProxyError('Unable to connect to proxy', NewConnectionError('<urllib3.connection.HTTPSConnection object at 0x7f1c775c0250>: Failed to establish a new connection: [Errno 111] Connection refused')))
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/home/lzm/conda_envs/4dvla_diff/lib/python3.10/site-packages/wandb/sdk/lib/retry.py", line 131, in __call__
+    result = self._call_fn(*args, **kwargs)
+  File "/home/lzm/conda_envs/4dvla_diff/lib/python3.10/site-packages/wandb/sdk/internal/internal_api.py", line 393, in execute
+    return self.client.execute(*args, **kwargs)  # type: ignore
+  File "/home/lzm/conda_envs/4dvla_diff/lib/python3.10/site-packages/wandb/vendor/gql-0.2.0/wandb_gql/client.py", line 52, in execute
+    result = self._get_result(document, *args, **kwargs)
+  File "/home/lzm/conda_envs/4dvla_diff/lib/python3.10/site-packages/wandb/vendor/gql-0.2.0/wandb_gql/client.py", line 60, in _get_result
+    return self.transport.execute(document, *args, **kwargs)
+  File "/home/lzm/conda_envs/4dvla_diff/lib/python3.10/site-packages/wandb/sdk/lib/gql_request.py", line 58, in execute
+    request = self.session.post(self.url, **post_args)
+  File "/home/lzm/conda_envs/4dvla_diff/lib/python3.10/site-packages/requests/sessions.py", line 637, in post
+    return self.request("POST", url, data=data, json=json, **kwargs)
+  File "/home/lzm/conda_envs/4dvla_diff/lib/python3.10/site-packages/requests/sessions.py", line 589, in request
+    resp = self.send(prep, **send_kwargs)
+  File "/home/lzm/conda_envs/4dvla_diff/lib/python3.10/site-packages/requests/sessions.py", line 703, in send
+    r = adapter.send(request, **kwargs)
+  File "/home/lzm/conda_envs/4dvla_diff/lib/python3.10/site-packages/requests/adapters.py", line 694, in send
+    raise ProxyError(e, request=request)
+requests.exceptions.ProxyError: HTTPSConnectionPool(host='api.wandb.ai', port=443): Max retries exceeded with url: /graphql (Caused by ProxyError('Unable to connect to proxy', NewConnectionError('<urllib3.connection.HTTPSConnection object at 0x7f1c775c0250>: Failed to establish a new connection: [Errno 111] Connection refused')))
+2025-06-30 02:03:09 INFO Retry attempt failed:
+Traceback (most recent call last):
+  File "/media/miniconda3/envs/efvla/lib/python3.10/site-packages/urllib3/connectionpool.py", line 700, in urlopen
+    self._prepare_proxy(conn)
+  File "/media/miniconda3/envs/efvla/lib/python3.10/site-packages/urllib3/connectionpool.py", line 996, in _prepare_proxy
+    conn.connect()
+  File "/media/miniconda3/envs/efvla/lib/python3.10/site-packages/urllib3/connection.py", line 414, in connect
+    self.sock = ssl_wrap_socket(
+  File "/media/miniconda3/envs/efvla/lib/python3.10/site-packages/urllib3/util/ssl_.py", line 449, in ssl_wrap_socket
+    ssl_sock = _ssl_wrap_socket_impl(
+  File "/media/miniconda3/envs/efvla/lib/python3.10/site-packages/urllib3/util/ssl_.py", line 493, in _ssl_wrap_socket_impl
+    return ssl_context.wrap_socket(sock, server_hostname=server_hostname)
+  File "/media/miniconda3/envs/efvla/lib/python3.10/ssl.py", line 513, in wrap_socket
+    return self.sslsocket_class._create(
+  File "/media/miniconda3/envs/efvla/lib/python3.10/ssl.py", line 1104, in _create
+    self.do_handshake()
+  File "/media/miniconda3/envs/efvla/lib/python3.10/ssl.py", line 1375, in do_handshake
+    self._sslobj.do_handshake()
+ssl.SSLEOFError: [SSL: UNEXPECTED_EOF_WHILE_READING] EOF occurred in violation of protocol (_ssl.c:1007)
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/media/miniconda3/envs/efvla/lib/python3.10/site-packages/requests/adapters.py", line 489, in send
+    resp = conn.urlopen(
+  File "/media/miniconda3/envs/efvla/lib/python3.10/site-packages/urllib3/connectionpool.py", line 787, in urlopen
+    retries = retries.increment(
+  File "/media/miniconda3/envs/efvla/lib/python3.10/site-packages/urllib3/util/retry.py", line 592, in increment
+    raise MaxRetryError(_pool, url, error or ResponseError(cause))
+urllib3.exceptions.MaxRetryError: HTTPSConnectionPool(host='api.wandb.ai', port=443): Max retries exceeded with url: /graphql (Caused by SSLError(SSLEOFError(8, '[SSL: UNEXPECTED_EOF_WHILE_READING] EOF occurred in violation of protocol (_ssl.c:1007)')))
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/media/miniconda3/envs/efvla/lib/python3.10/site-packages/wandb/sdk/lib/retry.py", line 131, in __call__
+    result = self._call_fn(*args, **kwargs)
+  File "/media/miniconda3/envs/efvla/lib/python3.10/site-packages/wandb/sdk/internal/internal_api.py", line 393, in execute
+    return self.client.execute(*args, **kwargs)  # type: ignore
+  File "/media/miniconda3/envs/efvla/lib/python3.10/site-packages/wandb/vendor/gql-0.2.0/wandb_gql/client.py", line 52, in execute
+    result = self._get_result(document, *args, **kwargs)
+  File "/media/miniconda3/envs/efvla/lib/python3.10/site-packages/wandb/vendor/gql-0.2.0/wandb_gql/client.py", line 60, in _get_result
+    return self.transport.execute(document, *args, **kwargs)
+  File "/media/miniconda3/envs/efvla/lib/python3.10/site-packages/wandb/sdk/lib/gql_request.py", line 58, in execute
+    request = self.session.post(self.url, **post_args)
+  File "/media/miniconda3/envs/efvla/lib/python3.10/site-packages/requests/sessions.py", line 635, in post
+    return self.request("POST", url, data=data, json=json, **kwargs)
+  File "/media/miniconda3/envs/efvla/lib/python3.10/site-packages/requests/sessions.py", line 587, in request
+    resp = self.send(prep, **send_kwargs)
+  File "/media/miniconda3/envs/efvla/lib/python3.10/site-packages/requests/sessions.py", line 701, in send
+    r = adapter.send(request, **kwargs)
+  File "/media/miniconda3/envs/efvla/lib/python3.10/site-packages/requests/adapters.py", line 563, in send
+    raise SSLError(e, request=request)
+requests.exceptions.SSLError: HTTPSConnectionPool(host='api.wandb.ai', port=443): Max retries exceeded with url: /graphql (Caused by SSLError(SSLEOFError(8, '[SSL: UNEXPECTED_EOF_WHILE_READING] EOF occurred in violation of protocol (_ssl.c:1007)')))
+2025-06-30 10:14:35 INFO open for scan: /media/liuzhuoyang/new_vla/5D_VLA_beta/exp/exp_4tasks_selected_keyframe_pointcloud_1024_0403_Pretrain2D_0623_E2_FreezeVistrue_Window0_2D_256_contrastive_Vislayer8_1024_0403_0630/wandb/offline-run-20250630_021014-13dljo4q/run-13dljo4q.wandb
+2025-06-30 10:14:36 INFO watching files in: /media/liuzhuoyang/new_vla/5D_VLA_beta/exp/exp_4tasks_selected_keyframe_pointcloud_1024_0403_Pretrain2D_0623_E2_FreezeVistrue_Window0_2D_256_contrastive_Vislayer8_1024_0403_0630/wandb/offline-run-20250630_021014-13dljo4q/files
+2025-06-30 10:14:36 INFO run started: 13dljo4q with start time 1751220614.888853
+2025-06-30 10:14:36 INFO saving file wandb-metadata.json with policy now
+2025-06-30 10:14:36 INFO saving file wandb-metadata.json with policy now
+2025-06-30 10:14:36 INFO saving file requirements.txt with policy now
+2025-06-30 10:14:38 INFO Uploaded file /tmp/tmpiqvqoiu8wandb/clb7eunh-wandb-metadata.json
+2025-06-30 10:14:38 INFO Uploaded file /tmp/tmpiqvqoiu8wandb/cxr3aduf-requirements.txt
+2025-06-30 10:25:18 INFO open for scan: /media/liuzhuoyang/new_vla/5D_VLA_beta/exp/exp_4tasks_selected_keyframe_pointcloud_1024_0403_Pretrain2D_0623_E2_FreezeVistrue_Window0_2D_256_contrastive_Vislayer8_1024_0403_0630/wandb/offline-run-20250630_021014-13dljo4q/run-13dljo4q.wandb
+2025-06-30 10:25:19 ERROR 409 response executing GraphQL.
+2025-06-30 10:25:19 ERROR {"errors":[{"message":"run 13dljo4q was previously created and deleted; try a new run name","path":["upsertBucket"]}],"data":{"upsertBucket":null}}
+2025-06-30 10:25:20 ERROR 409 response executing GraphQL.
+2025-06-30 10:25:20 ERROR {"errors":[{"message":"run 13dljo4q was previously created and deleted; try a new run name","path":["upsertBucket"]}],"data":{"upsertBucket":null}}
+2025-06-30 10:25:23 ERROR 409 response executing GraphQL.
+2025-06-30 10:25:23 ERROR {"errors":[{"message":"run 13dljo4q was previously created and deleted; try a new run name","path":["upsertBucket"]}],"data":{"upsertBucket":null}}
+2025-06-30 10:25:23 INFO Retry attempt failed:
+Traceback (most recent call last):
+  File "/media/miniconda3/envs/efvla/lib/python3.10/site-packages/wandb/sdk/lib/retry.py", line 131, in __call__
+    result = self._call_fn(*args, **kwargs)
+  File "/media/miniconda3/envs/efvla/lib/python3.10/site-packages/wandb/sdk/internal/internal_api.py", line 345, in execute
+    return self.client.execute(*args, **kwargs)  # type: ignore
+  File "/media/miniconda3/envs/efvla/lib/python3.10/site-packages/wandb/vendor/gql-0.2.0/wandb_gql/client.py", line 52, in execute
+    result = self._get_result(document, *args, **kwargs)
+  File "/media/miniconda3/envs/efvla/lib/python3.10/site-packages/wandb/vendor/gql-0.2.0/wandb_gql/client.py", line 60, in _get_result
+    return self.transport.execute(document, *args, **kwargs)
+  File "/media/miniconda3/envs/efvla/lib/python3.10/site-packages/wandb/sdk/lib/gql_request.py", line 59, in execute
+    request.raise_for_status()
+  File "/media/miniconda3/envs/efvla/lib/python3.10/site-packages/requests/models.py", line 1026, in raise_for_status
+    raise HTTPError(http_error_msg, response=self)
+requests.exceptions.HTTPError: 409 Client Error: Conflict for url: https://api.wandb.ai/graphql
+2025-06-30 10:25:42 INFO open for scan: /media/liuzhuoyang/new_vla/5D_VLA_beta/exp/exp_4tasks_selected_keyframe_pointcloud_1024_0403_Pretrain2D_0623_E2_FreezeVistrue_Window0_2D_256_contrastive_Vislayer8_1024_0403_0630/wandb/offline-run-20250630_021014-13dljo4q/run-13dljo4q.wandb
+2025-06-30 10:25:43 ERROR 409 response executing GraphQL.
+2025-06-30 10:25:43 ERROR {"errors":[{"message":"run 13dljo4q was previously created and deleted; try a new run name","path":["upsertBucket"]}],"data":{"upsertBucket":null}}
+2025-06-30 10:25:44 ERROR 409 response executing GraphQL.
+2025-06-30 10:25:44 ERROR {"errors":[{"message":"run 13dljo4q was previously created and deleted; try a new run name","path":["upsertBucket"]}],"data":{"upsertBucket":null}}
+2025-06-30 10:25:47 ERROR 409 response executing GraphQL.
+2025-06-30 10:25:47 ERROR {"errors":[{"message":"run 13dljo4q was previously created and deleted; try a new run name","path":["upsertBucket"]}],"data":{"upsertBucket":null}}
+2025-06-30 10:25:47 INFO Retry attempt failed:
+Traceback (most recent call last):
+  File "/media/miniconda3/envs/efvla/lib/python3.10/site-packages/wandb/sdk/lib/retry.py", line 131, in __call__
+    result = self._call_fn(*args, **kwargs)
+  File "/media/miniconda3/envs/efvla/lib/python3.10/site-packages/wandb/sdk/internal/internal_api.py", line 345, in execute
+    return self.client.execute(*args, **kwargs)  # type: ignore
+  File "/media/miniconda3/envs/efvla/lib/python3.10/site-packages/wandb/vendor/gql-0.2.0/wandb_gql/client.py", line 52, in execute
+    result = self._get_result(document, *args, **kwargs)
+  File "/media/miniconda3/envs/efvla/lib/python3.10/site-packages/wandb/vendor/gql-0.2.0/wandb_gql/client.py", line 60, in _get_result
+    return self.transport.execute(document, *args, **kwargs)
+  File "/media/miniconda3/envs/efvla/lib/python3.10/site-packages/wandb/sdk/lib/gql_request.py", line 59, in execute
+    request.raise_for_status()
+  File "/media/miniconda3/envs/efvla/lib/python3.10/site-packages/requests/models.py", line 1026, in raise_for_status
+    raise HTTPError(http_error_msg, response=self)
+requests.exceptions.HTTPError: 409 Client Error: Conflict for url: https://api.wandb.ai/graphql
+2025-06-30 10:25:52 ERROR 409 response executing GraphQL.
+2025-06-30 10:25:52 ERROR {"errors":[{"message":"run 13dljo4q was previously created and deleted; try a new run name","path":["upsertBucket"]}],"data":{"upsertBucket":null}}
+2025-06-30 10:26:01 ERROR 409 response executing GraphQL.
+2025-06-30 10:26:01 ERROR {"errors":[{"message":"run 13dljo4q was previously created and deleted; try a new run name","path":["upsertBucket"]}],"data":{"upsertBucket":null}}

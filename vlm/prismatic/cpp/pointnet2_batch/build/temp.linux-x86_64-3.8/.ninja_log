@@ -1,0 +1,19 @@
+# ninja log v5
+2	8580	1697370203000000000	/mnt/petrelfs/guoziyu/PointNeXt/openpoints/cpp/pointnet2_batch/build/temp.linux-x86_64-3.8/src/ball_query.o	9a0c11f0c0e714cb
+3	8919	1697370204000000000	/mnt/petrelfs/guoziyu/PointNeXt/openpoints/cpp/pointnet2_batch/build/temp.linux-x86_64-3.8/src/sampling.o	c85e31a961e04eec
+2	8929	1697370204000000000	/mnt/petrelfs/guoziyu/PointNeXt/openpoints/cpp/pointnet2_batch/build/temp.linux-x86_64-3.8/src/group_points.o	ac04a500e046faa3
+2	8933	1697370204000000000	/mnt/petrelfs/guoziyu/PointNeXt/openpoints/cpp/pointnet2_batch/build/temp.linux-x86_64-3.8/src/interpolate.o	147b39d2a636d849
+2	21045	1697370216000000000	/mnt/petrelfs/guoziyu/PointNeXt/openpoints/cpp/pointnet2_batch/build/temp.linux-x86_64-3.8/src/pointnet2_api.o	a75441027489a9d3
+2	22173	1697370217000000000	/mnt/petrelfs/guoziyu/PointNeXt/openpoints/cpp/pointnet2_batch/build/temp.linux-x86_64-3.8/src/group_points_gpu.o	7f8ec8ae656118f7
+2	22252	1697370217000000000	/mnt/petrelfs/guoziyu/PointNeXt/openpoints/cpp/pointnet2_batch/build/temp.linux-x86_64-3.8/src/interpolate_gpu.o	3b0915c60c862df2
+2	22534	1697370217000000000	/mnt/petrelfs/guoziyu/PointNeXt/openpoints/cpp/pointnet2_batch/build/temp.linux-x86_64-3.8/src/ball_query_gpu.o	21f63e4dadb28fcd
+2	23161	1697370218000000000	/mnt/petrelfs/guoziyu/PointNeXt/openpoints/cpp/pointnet2_batch/build/temp.linux-x86_64-3.8/src/sampling_gpu.o	eb019cb6d27ea7e2
+1	4777	1743135836690933322	/share/lzy/new_vla/3D_VLA_beta/CogACT/vlm/prismatic/cpp/pointnet2_batch/build/temp.linux-x86_64-3.8/src/group_points.o	8662a0077f21459f
+1	4806	1743135836719674395	/share/lzy/new_vla/3D_VLA_beta/CogACT/vlm/prismatic/cpp/pointnet2_batch/build/temp.linux-x86_64-3.8/src/interpolate.o	a82f548f474be1a7
+1	4833	1743135836746581960	/share/lzy/new_vla/3D_VLA_beta/CogACT/vlm/prismatic/cpp/pointnet2_batch/build/temp.linux-x86_64-3.8/src/sampling.o	1cdac5b1cce39fd
+0	4998	1743135836911786107	/share/lzy/new_vla/3D_VLA_beta/CogACT/vlm/prismatic/cpp/pointnet2_batch/build/temp.linux-x86_64-3.8/src/ball_query.o	929af431a76b3b1
+1	13606	1743135845516048388	/share/lzy/new_vla/3D_VLA_beta/CogACT/vlm/prismatic/cpp/pointnet2_batch/build/temp.linux-x86_64-3.8/src/group_points_gpu.o	cbdfff10dc4c1ef5
+1	13651	1743135845560887742	/share/lzy/new_vla/3D_VLA_beta/CogACT/vlm/prismatic/cpp/pointnet2_batch/build/temp.linux-x86_64-3.8/src/interpolate_gpu.o	f0d40861348052a6
+1	13950	1743135845860539997	/share/lzy/new_vla/3D_VLA_beta/CogACT/vlm/prismatic/cpp/pointnet2_batch/build/temp.linux-x86_64-3.8/src/ball_query_gpu.o	b60d903bf3dcb25e
+1	14311	1743135846220489725	/share/lzy/new_vla/3D_VLA_beta/CogACT/vlm/prismatic/cpp/pointnet2_batch/build/temp.linux-x86_64-3.8/src/sampling_gpu.o	284bf2c88c6c8e19
+0	16441	1743135848342175942	/share/lzy/new_vla/3D_VLA_beta/CogACT/vlm/prismatic/cpp/pointnet2_batch/build/temp.linux-x86_64-3.8/src/pointnet2_api.o	f6d66375f677cd9d

@@ -1,0 +1,1310 @@
+"""
+prismatic.py
+
+PyTorch Module defining a PrismaticVLM, our general interface for defining the various different VLMs in our work.
+
+Notes:
+    - For now, we don't subclass `transformers.PretrainedModel` (or CausalLM). Instead, we assume a very limited subset
+      of the {Model}ForCausalLM API that enables dispatch to the underlying LLM's `generate` utilities (feeding inputs
+      through our custom projection shim).
+"""
+
+from __future__ import annotations
+
+from functools import partial
+from pathlib import Path
+from typing import Callable, Dict, List, Optional, Type, Union
+
+import torch
+import torch.nn as nn
+import numpy as np
+from PIL import Image
+from torch.distributed.fsdp.wrap import _module_wrap_policy, _or_policy
+from transformers.modeling_outputs import CausalLMOutputWithPast
+
+from prismatic.models.backbones.llm import LLMBackbone
+from prismatic.models.backbones.llm.prompting import PromptBuilder
+from prismatic.models.backbones.vision import VisionBackbone
+from prismatic.models.vlms.base_vlm import VLM
+from prismatic.overwatch import initialize_overwatch
+from prismatic.util.nn_utils import FusedMLPProjector, LinearProjector, MLPProjector
+
+# 新加入的2D视觉处理模块
+from prismatic.models.eve_tokenizer.vision_tokenizer import VisionTokenizer
+from prismatic.models.eve_tokenizer.vision_tokenizer import MLP_GELU
+from prismatic.models.fuser.fuser import MultiModalAligner, PerceiverAligner
+from prismatic.models.fuser.contrastive import project_3d_to_2d, project_3d_to_2d_672_pyrep_compatible
+from prismatic.models.fuser.selection import SelectionHead
+from prismatic.models.constants import (DEFAULT_IM_END_TOKEN, DEFAULT_IM_START_TOKEN,
+                               DEFAULT_IMAGE_PATCH_TOKEN, IGNORE_INDEX,
+                               IMAGE_TOKEN_INDEX)
+
+# 新加入的3D视觉处理模块
+from prismatic.a2pmodels.backbone.pointvit import PointViT
+
+from action_model import ActionEmbedder, TimestepEmbedder, LabelEmbedder, FinalLayer
+
+# Initialize Overwatch =>> Wraps `logging.Logger`
+overwatch = initialize_overwatch(__name__)
+
+
+import matplotlib.pyplot as plt
+import numpy as np
+import os
+from mpl_toolkits.mplot3d import Axes3D   # ⬆️ NEW
+
+
+def save_projection_visualization(
+    xyz_3d, 
+    patch_indices, 
+    valid_mask, 
+    image_size=(672, 672), 
+    total_stride=42,
+    save_dir="projection_visualization",
+    rgb_image=None,  # 新增参数：RGB背景图像
+    background_alpha=0.4  # 新增参数：背景透明度
+):
+    """
+    保存3D点投影到2D图像、Patch索引热力图，以及3D点云分布（新增）。
+    
+    Args:
+        xyz_3d:        世界坐标系的3D点 [B, N, 3] (N=256)
+        patch_indices: 投影后的Patch索引 [B, N, 2] (row, col)
+        valid_mask:    有效性掩码 [B, N]
+        image_size:    图像分辨率 (H, W)
+        total_stride:  总步长 (e.g., 42)
+        save_dir:      保存目录（自动创建）
+    """
+    os.makedirs(save_dir, exist_ok=True)
+    
+    # 仅处理 batch 中第 0 个样本
+    xyz_3d = xyz_3d[0].cpu().numpy()             # [256, 3]
+    patch_indices = patch_indices[0].cpu().numpy()  # [256, 2]
+    valid_mask = valid_mask[0].cpu().numpy()        # [256]
+    rgb_image = rgb_image[0].float().cpu().numpy()    
+    rgb_image = np.transpose(rgb_image, (1, 2, 0))
+
+    H, W = image_size
+    patch_h, patch_w = H // total_stride, W // total_stride
+
+    # ---------- 图 1：2D 投影 ----------
+    fig1, ax1 = plt.subplots(figsize=(10, 10))
+    ax1.set_title("2D Projection & Valid Points")
+    ax1.set_xlim(0, W); ax1.set_ylim(H, 0)
+    ax1.grid(color='gray', linestyle=':', alpha=0.5)
+    
+    # 添加RGB背景（如果提供）
+    if rgb_image is not None:
+        # 确保图像尺寸匹配
+        print(rgb_image)
+        if rgb_image.shape[:2] == (H, W):
+            # 归一化到[0,1]范围并调整透明度
+            ax1.imshow(rgb_image.astype(np.float32), 
+                      extent=[0, W, H, 0], 
+                      alpha=background_alpha)
+        else:
+            print(f"Warning: RGB image size {rgb_image.shape} doesn't match {image_size}")
+
+    # 网格
+    for x in range(0, W, total_stride):
+        ax1.axvline(x, color='red', alpha=0.2)
+    for y in range(0, H, total_stride):
+        ax1.axhline(y, color='red', alpha=0.2)
+
+    # 散点
+    for i in range(len(xyz_3d)):
+        color, alpha, label = ("green", 0.7, "Valid") if valid_mask[i] else ("red", 0.3, "Invalid")
+        ax1.scatter(
+            patch_indices[i, 1] * total_stride + total_stride//2,
+            patch_indices[i, 0] * total_stride + total_stride//2,
+            color=color,
+            s=50,
+            alpha=alpha,
+            label=label if i == 0 else None,
+        )
+    ax1.legend(loc="upper right")
+    fig1.savefig(os.path.join(save_dir, "2d_projection.png"), dpi=120, bbox_inches="tight")
+    plt.close(fig1)
+
+    # ---------- 图 2：Patch 热力图 ----------
+    heatmap = np.zeros((patch_h, patch_w), dtype=int)
+    for r, c in patch_indices[valid_mask]:
+        heatmap[r, c] += 1
+
+    fig2, ax2 = plt.subplots(figsize=(10, 10))
+    ax2.set_title("Patch Indices Heatmap (with RGB Background)")
+    
+    # 添加RGB背景（如果提供）
+    if rgb_image is not None:
+        # 下采样到热力图尺寸
+        bg_resized = rgb_image[::total_stride, ::total_stride]
+        ax2.imshow(bg_resized.astype(np.float32), 
+                  alpha=background_alpha, 
+                  extent=[0, patch_w, patch_h, 0])
+    
+    # 热力图（叠加在背景上）
+    im = ax2.imshow(heatmap, cmap="viridis", origin="upper", alpha=0.7)
+    ax2.set_xticks(np.arange(patch_w)); ax2.set_yticks(np.arange(patch_h))
+    ax2.set_xlabel("Patch Column"); ax2.set_ylabel("Patch Row")
+    plt.colorbar(im, ax=ax2, label="Point Count")
+    fig2.savefig(os.path.join(save_dir, "patch_heatmap_with_bg.png"), dpi=120, bbox_inches="tight")
+    plt.close(fig2)
+
+    # ---------- 图 3：3D 点云散点图 ----------
+    fig3 = plt.figure(figsize=(10, 10))
+    ax3 = fig3.add_subplot(111, projection='3d')
+    ax3.set_title("3D Patch Centers")
+    ax3.scatter(
+        xyz_3d[:, 0], xyz_3d[:, 1], xyz_3d[:, 2],
+        c='steelblue', s=30, depthshade=True
+    )
+    ax3.set_xlabel("X"); ax3.set_ylabel("Y"); ax3.set_zlabel("Z")
+    # 让三轴比例一致（可选）
+    max_range = (xyz_3d.max(axis=0) - xyz_3d.min(axis=0)).max() / 2.0
+    mid = xyz_3d.mean(axis=0)
+    ax3.set_xlim(mid[0] - max_range, mid[0] + max_range)
+    ax3.set_ylim(mid[1] - max_range, mid[1] + max_range)
+    ax3.set_zlim(mid[2] - max_range, mid[2] + max_range)
+    fig3.savefig(os.path.join(save_dir, "3d_pointcloud.png"), dpi=120, bbox_inches="tight")
+    plt.close(fig3)
+
+    print(f"Visualization saved to: {os.path.abspath(save_dir)}/")
+
+def save_projection_visualization_ori(
+    xyz_3d, 
+    patch_indices, 
+    valid_mask, 
+    image_size=(672, 672), 
+    total_stride=42,
+    save_dir="projection_visualization",
+):
+    """
+    保存3D点投影到2D图像、Patch索引热力图，以及3D点云分布（新增）。
+    
+    Args:
+        xyz_3d:        世界坐标系的3D点 [B, N, 3] (N=256)
+        patch_indices: 投影后的Patch索引 [B, N, 2] (row, col)
+        valid_mask:    有效性掩码 [B, N]
+        image_size:    图像分辨率 (H, W)
+        total_stride:  总步长 (e.g., 42)
+        save_dir:      保存目录（自动创建）
+    """
+    os.makedirs(save_dir, exist_ok=True)
+    
+    # 仅处理 batch 中第 0 个样本
+    xyz_3d = xyz_3d[0].cpu().numpy()             # [256, 3]
+    patch_indices = patch_indices[0].cpu().numpy()  # [256, 2]
+    valid_mask = valid_mask[0].cpu().numpy()        # [256]
+
+    H, W = image_size
+    patch_h, patch_w = H // total_stride, W // total_stride
+
+    # ---------- 图 1：2D 投影 ----------
+    fig1, ax1 = plt.subplots(figsize=(10, 10))
+    ax1.set_title("2D Projection & Valid Points")
+    ax1.set_xlim(0, W); ax1.set_ylim(H, 0)
+    ax1.grid(color='gray', linestyle=':', alpha=0.5)
+
+    # 网格
+    for x in range(0, W, total_stride):
+        ax1.axvline(x, color='red', alpha=0.2)
+    for y in range(0, H, total_stride):
+        ax1.axhline(y, color='red', alpha=0.2)
+
+    # 散点
+    for i in range(len(xyz_3d)):
+        color, alpha, label = ("green", 0.7, "Valid") if valid_mask[i] else ("red", 0.3, "Invalid")
+        ax1.scatter(
+            patch_indices[i, 1] * total_stride,
+            patch_indices[i, 0] * total_stride,
+            color=color,
+            s=50,
+            alpha=alpha,
+            label=label if i == 0 else None,
+        )
+    ax1.legend(loc="upper right")
+    fig1.savefig(os.path.join(save_dir, "2d_projection.png"), dpi=120, bbox_inches="tight")
+    plt.close(fig1)
+
+    # ---------- 图 2：Patch 热力图 ----------
+    heatmap = np.zeros((patch_h, patch_w), dtype=int)
+    for r, c in patch_indices[valid_mask]:
+        heatmap[r, c] += 1
+
+    fig2, ax2 = plt.subplots(figsize=(10, 10))
+    ax2.set_title("Patch Indices Heatmap")
+    im = ax2.imshow(heatmap, cmap="viridis", origin="upper")
+    ax2.set_xticks(np.arange(patch_w)); ax2.set_yticks(np.arange(patch_h))
+    ax2.set_xlabel("Patch Column"); ax2.set_ylabel("Patch Row")
+    plt.colorbar(im, ax=ax2, label="Point Count")
+    fig2.savefig(os.path.join(save_dir, "patch_heatmap.png"), dpi=120, bbox_inches="tight")
+    plt.close(fig2)
+
+    # ---------- 图 3：3D 点云散点图 ----------
+    fig3 = plt.figure(figsize=(10, 10))
+    ax3 = fig3.add_subplot(111, projection='3d')
+    ax3.set_title("3D Patch Centers")
+    ax3.scatter(
+        xyz_3d[:, 0], xyz_3d[:, 1], xyz_3d[:, 2],
+        c='steelblue', s=30, depthshade=True
+    )
+    ax3.set_xlabel("X"); ax3.set_ylabel("Y"); ax3.set_zlabel("Z")
+    # 让三轴比例一致（可选）
+    max_range = (xyz_3d.max(axis=0) - xyz_3d.min(axis=0)).max() / 2.0
+    mid = xyz_3d.mean(axis=0)
+    ax3.set_xlim(mid[0] - max_range, mid[0] + max_range)
+    ax3.set_ylim(mid[1] - max_range, mid[1] + max_range)
+    ax3.set_zlim(mid[2] - max_range, mid[2] + max_range)
+    fig3.savefig(os.path.join(save_dir, "3d_pointcloud.png"), dpi=120, bbox_inches="tight")
+    plt.close(fig3)
+
+    print(f"Visualization saved to: {os.path.abspath(save_dir)}/")
+    
+
+
+class PrismaticVLM(VLM):
+    def __init__(
+        self,
+        model_id: str,
+        llm_backbone: LLMBackbone,
+        enable_mixed_precision_training: bool = True,
+        in_channels = 7,
+        token_size = 4096,
+        future_action_window_size=0,
+        past_action_window_size=0,
+        class_dropout_prob=0.0,
+        norm_stats: Dict[str, Dict[str, Dict[str, Dict[str, List[float]]]]] = None,
+        use_diff = False,
+        llm_vision_layers: int = 1,
+        llm_action_layers: int = 1,
+        **kwargs,
+    ) -> None:
+        super().__init__(
+            "prismatic",
+            model_id,
+            llm_backbone,
+            enable_mixed_precision_training=enable_mixed_precision_training,
+        )
+        self.use_diff = use_diff
+        self.llm_vision_layers = llm_vision_layers
+        self.llm_action_layers = llm_action_layers
+
+        # === Generation Utilities ===
+        #   => For computing likelihoods --> get tokens corresponding to "True", "False" and "Yes", "No"
+        self.string2idx = {}
+        for trigger_string in ["True", "False", "Yes", "No"] + [chr(ord("A") + i) for i in range(26)]:
+            token_idx_list = self.llm_backbone.tokenizer.encode(trigger_string, add_special_tokens=False)
+            assert len(token_idx_list) == 1, f'String "{trigger_string}" is tokenized as more than one token!'
+            self.string2idx[trigger_string] = token_idx_list[0]
+
+        # DiT
+        self.norm_stats = norm_stats
+        self.class_dropout_prob = class_dropout_prob
+        self.future_action_window_size = future_action_window_size
+        self.action_dim = in_channels
+        
+        self.mm_hidden_size = 1024 # 注意后面要看这个到底是多少
+        self.vision_tower_2d = VisionTokenizer(input_size=self.mm_hidden_size, 
+                                            vision_tower_name="/media/liuzhuoyang/new_vla/EVE/EVEv1/openai/eve-patch14-anypixel-672")
+        # self.projector_2d = MLPProjector(self.mm_hidden_size, token_size)
+        self.projector_2d = MLP_GELU(self.mm_hidden_size, token_size, 2)
+
+        # 3D Vision Tower
+        self.vision_tower_3d = PointViT(in_channels=3,
+                                        embed_dim=768,
+                                        depth=12,
+                                        num_heads=12,
+                                        mlp_ratio=4.,
+                                        qkv_bias=True,
+                                        base_ckpt_path="/media/liuzhuoyang/new_vla/Any2Point/Any2Point_CLIP_Lang/ckpts/ViT-L-14.pt")
+        self.projector_3d = MLPProjector(self.vision_tower_3d.embed_dim, token_size)
+
+        self.proprio_embedder = ActionEmbedder(action_size=in_channels, hidden_size=token_size)
+        if self.use_diff:
+            self.x_embedder = ActionEmbedder(action_size=in_channels, hidden_size=token_size)
+            self.t_embedder = TimestepEmbedder(token_size)
+            self.z_embedder = LabelEmbedder(in_size=token_size, hidden_size=token_size, dropout_prob=self.class_dropout_prob)
+            # self.final_layer = FinalLayer(token_size, in_channels)
+            self.final_layers = nn.ModuleList([
+                FinalLayer(token_size, in_channels) for _ in range(4)  # 为4个层创建4个FinalLayer
+            ])
+            selection_head_input_dim = token_size * 4
+            num_heads_to_select = 4
+            self.selection_head = FinalLayer(selection_head_input_dim, num_heads_to_select)
+
+        # Set Module Keys =>> used in Checkpoint Saving / Model Loading
+        self.all_module_keys = ["vision_tower_2d", "vision_tower_3d","projector_2d", "projector_3d",
+                                "llm_backbone", "proprio_embedder"]
+        if self.use_diff:
+            self.all_module_keys.extend(["x_embedder", "t_embedder", "final_layers", "selection_head"])
+        self.trainable_module_keys = []
+
+        self.initialize_weights()
+        self.vision_tower_3d.initialize_weights()
+    
+    def get_vision_tower_3d(self):
+        vision_tower_3d = getattr(self, 'vision_tower_3d', None)
+        if type(vision_tower_3d) is list:
+            vision_tower_3d = vision_tower_3d[0]
+        return vision_tower_3d
+    
+    def get_vision_tower_2d(self):
+        vision_tower_2d = getattr(self, 'vision_tower_2d', None)
+        if type(vision_tower_2d) is list:
+            vision_tower_2d = vision_tower_2d[0]
+        return vision_tower_2d
+    
+    def encode_images(self, images):
+        vision_tower_2d = self.get_vision_tower_2d()
+        return vision_tower_2d(images, self.projector_2d)
+
+    def initialize_weights(self):
+        # Initialize transformer layers:
+        def _basic_init(module):
+            if isinstance(module, nn.Linear):
+                torch.nn.init.xavier_uniform_(module.weight)
+                if module.bias is not None:
+                    nn.init.constant_(module.bias, 0)
+            elif isinstance(module, nn.LayerNorm):
+                nn.init.constant_(module.weight, 1.0)  # LayerNorm gamma初始化为1
+                nn.init.constant_(module.bias, 0)     # LayerNorm beta初始化为0
+
+        self.apply(_basic_init)
+
+        if self.use_diff:
+            nn.init.normal_(self.x_embedder.mlp.fc1.weight, std=0.02)
+            nn.init.normal_(self.x_embedder.mlp.fc2.weight, std=0.02)
+
+            nn.init.normal_(self.proprio_embedder.mlp.fc1.weight, std=0.02)
+            nn.init.normal_(self.proprio_embedder.mlp.fc2.weight, std=0.02)
+
+            # Initialize timestep embedding MLP:
+            nn.init.normal_(self.t_embedder.mlp[0].weight, std=0.02)
+            nn.init.normal_(self.t_embedder.mlp[2].weight, std=0.02)
+
+            for final_layer in self.final_layers:
+                nn.init.constant_(final_layer.mlp.fc2.weight, 0)
+                nn.init.constant_(final_layer.mlp.fc2.bias, 0)
+            
+    def load_encoder_to_vision_tower(self, ckpt_path, vision_tower_3d):
+        """
+        从保存的检查点加载 encoder 参数到 vision_tower_3d
+        参数:
+            ckpt_path: 保存的 .pth 检查点路径
+            vision_tower_3d: PointViT 实例 (self.vision_tower_3d)
+        """
+        # 1. 加载检查点
+        checkpoint = torch.load(ckpt_path, map_location='cpu')
+        if 'model' not in checkpoint:
+            raise KeyError(f"检查点中缺少 'model' 键。可用键: {checkpoint.keys()}")
+
+        # 2. 提取 encoder 参数
+        model_state = checkpoint['model']
+        
+        # 2.1 查找 encoder 参数 (假设键名以 'encoder.' 开头)
+        encoder_state = {
+            k.replace('encoder.', ''): v 
+            for k, v in model_state.items() 
+            if k.startswith('encoder.')
+        }
+        
+        if not encoder_state:
+            raise KeyError(f"未找到 encoder 参数。示例键名: {list(model_state.keys())[:5]}")
+
+        # 3. 处理多GPU前缀 (如果 vision_tower_3d 是 DataParallel/DistributedDataParallel 包装的)
+        if hasattr(vision_tower_3d, 'module'):  # 多GPU情况
+            vision_tower = vision_tower_3d.module
+        else:
+            vision_tower = vision_tower_3d
+
+        # 4. 加载参数 (非严格模式，允许部分不匹配)
+        missing_keys, unexpected_keys = vision_tower.load_state_dict(encoder_state, strict=False)
+        
+        # 5. 打印调试信息
+        print(f"成功加载 {len(encoder_state)} 个参数到 vision_tower_3d")
+        if missing_keys:
+            print(f"! 缺失参数 ({len(missing_keys)} 个):\n  {missing_keys[:3]}...")
+        if unexpected_keys:
+            print(f"! 多余参数 ({len(unexpected_keys)} 个):\n  {unexpected_keys[:3]}...")
+
+        return {
+            'missing_keys': missing_keys,
+            'unexpected_keys': unexpected_keys
+        }
+
+    @classmethod
+    def from_pretrained(
+        cls,
+        pretrained_checkpoint: Path,
+        model_id: str,
+        llm_backbone: LLMBackbone,
+        enable_mixed_precision_training: bool = True,
+        freeze_weights: bool = True,
+        class_dropout_prob: float = 0.0,
+        use_diff: bool = False,
+        **kwargs,
+    ) -> PrismaticVLM:
+        """Initialize a PrismaticVLM from a pretrained checkpoint, freezing all weights, tailored for inference."""
+        vlm = cls(
+            model_id,
+            llm_backbone,
+            enable_mixed_precision_training=enable_mixed_precision_training,
+            class_dropout_prob=class_dropout_prob,
+            use_diff=use_diff,
+            **kwargs,
+        )
+
+        if not isinstance(pretrained_checkpoint, dict):
+            # Load from Checkpoint (Custom --> should load both *projector* and *llm* weights)
+            model_state_dict = torch.load(pretrained_checkpoint, map_location="cpu")["model"]
+        else:
+            model_state_dict = pretrained_checkpoint
+        
+        assert (
+         "llm_backbone" in model_state_dict
+        ), "PrismaticVLM `from_pretrained` expects checkpoint with keys for `llm_backbone`!"
+
+        vlm.llm_backbone.load_state_dict(model_state_dict["llm_backbone"],strict=False) # not strict, because we added contrastive loss module
+        
+        vlm.load_encoder_to_vision_tower(ckpt_path="/media/liuzhuoyang/new_vla/Any2Point/Any2Point_CLIP_Lang/ckpts/Language_CLIP_Scan.pth",
+            vision_tower_3d=vlm.vision_tower_3d)
+        
+        # Freeze Weights
+        if freeze_weights:
+            vlm.requires_grad_(False)
+            vlm.eval()
+
+        return vlm
+
+    def get_prompt_builder(self, system_prompt: Optional[str] = None) -> PromptBuilder:
+        prompt_initializer: Type[PromptBuilder] = self.llm_backbone.prompt_builder_fn
+        return prompt_initializer(self.model_family, system_prompt=system_prompt)
+
+    def freeze_backbones(self, stage: str) -> None:
+        """
+        This function sets `requires_grad_` on each of the component modules explicitly, depending on stage.
+
+        We support two separate stages --> "align" and "finetune".
+            => "align" --> vision_backbone*, llm_backbone* are frozen; only the `projector` is trained.
+            => "finetune" --> vision_backbone* is frozen; both `projector` and `llm_backbone` are trained.
+
+        :param stage: Pretraining stage in < "align" | "finetune" | "full-finetune" | "vla-train" | "vla-full-train" >
+        """
+        if stage == "align":
+            self.vision_tower_2d.requires_grad_(False)
+            self.vision_tower_3d.requires_grad_(False)
+            self.projector_2d.requires_grad_(True)
+            self.projector_3d.requires_grad_(True)
+            self.llm_backbone.requires_grad_(False)
+
+            # Add to `self.trainable_module_keys`
+            self.trainable_module_keys = ["proprio_embedder","projector_3d","projector_2d"]
+            if self.use_diff:
+                self.trainable_module_keys.extend(["x_embedder", "t_embedder", "final_layer"])
+
+            # Update Trackers
+            self.vision_backbone_requires_grad = False
+
+            # Explicitly Log Frozen / Trainable Components
+            overwatch.info(f"[Frozen]    🥶 =>> Vision Tower 2D ", ctx_level=1)
+            overwatch.info(f"[Frozen]    🥶 =>> Vision Tower 3D ", ctx_level=1)
+            overwatch.info(f"[Frozen]    🥶 =>> LLM Backbone `{self.llm_backbone.identifier}`", ctx_level=1)
+            overwatch.info(f"[TRAINABLE] 🔥 =>> Projector 2D ", ctx_level=1)
+            overwatch.info(f"[TRAINABLE] 🔥 =>> Projector 3D ", ctx_level=1)
+
+        elif stage in {"finetune", "vla-train"}:
+            self.vision_tower_2d.requires_grad_(False)
+            self.vision_tower_3d.requires_grad_(False)
+            self.llm_backbone.requires_grad_(True)
+            self.projector_2d.requires_grad_(True)
+            self.projector_3d.requires_grad_(True)
+            self.selection_head.requires_grad_(True)
+
+            # Add to `self.trainable_module_keys`
+            self.trainable_module_keys = ["llm_backbone","projector_2d","projector_3d",
+                                          "proprio_embedder"]
+            if self.use_diff:
+                self.trainable_module_keys.extend(["x_embedder", "t_embedder","final_layers","selection_head"])
+
+            # Update Trackers
+            self.vision_backbone_requires_grad = False
+
+            # Explicitly Log Frozen / Unfrozen Components
+            overwatch.info(f"[Frozen]    🥶 =>> Vision Tower 2D ", ctx_level=1)
+            overwatch.info(f"[Frozen]    🥶 =>> Vision Tower 3D ", ctx_level=1)
+            overwatch.info(f"[TRAINABLE] 🔥 =>> LLM Backbone `{self.llm_backbone.identifier}`", ctx_level=1)
+            overwatch.info(f"[TRAINABLE] 🔥 =>> Projector 2D ", ctx_level=1)
+            overwatch.info(f"[TRAINABLE] 🔥 =>> Projector 3D ", ctx_level=1)
+            overwatch.info(f"[TRAINABLE] 🔥 =>> Selection Head ", ctx_level=1)
+
+        elif stage in {"full-finetune", "vla-full-train"}:
+            self.vision_tower_2d.requires_grad_(True)
+            self.vision_tower_3d.requires_grad_(True)
+            self.llm_backbone.requires_grad_(True)
+            self.projector_2d.requires_grad_(True)
+            self.projector_3d.requires_grad_(True)
+            self.selection_head.requires_grad_(True)
+
+            # Add to `self.trainable_module_keys`
+            self.trainable_module_keys = ["vision_tower_2d", "vision_tower_3d", 
+                                          "projector_2d", "projector_3d",
+                                          "llm_backbone", "proprio_embedder"]
+            if self.use_diff:
+                self.trainable_module_keys.extend(["x_embedder", "t_embedder", "final_layers","selection_head"])
+
+            # Update Trackers
+            self.vision_backbone_requires_grad = True
+
+            # Explicitly Log Frozen / Unfrozen Components
+            overwatch.info(f"[TRAINABLE] 🔥 =>> Vision Tower 2D ", ctx_level=1)
+            overwatch.info(f"[TRAINABLE] 🔥 =>> Vision Tower 3D ", ctx_level=1)
+            overwatch.info(f"[TRAINABLE] 🔥 =>> LLM Backbone `{self.llm_backbone.identifier}`", ctx_level=1)
+            overwatch.info(f"[TRAINABLE] 🔥 =>> Projector 2D ", ctx_level=1)
+            overwatch.info(f"[TRAINABLE] 🔥 =>> Projector 3D ", ctx_level=1)
+            overwatch.info(f"[TRAINABLE] 🔥 =>> Selection Head ", ctx_level=1)
+        
+        elif stage in {"selection-head-finetune"}:
+            self.vision_tower_2d.requires_grad_(False)
+            self.vision_tower_3d.requires_grad_(False)
+            self.llm_backbone.requires_grad_(False)
+            self.projector_2d.requires_grad_(False)
+            self.projector_3d.requires_grad_(False)
+            if self.use_diff:
+                self.selection_head.requires_grad_(True)
+                self.proprio_embedder.requires_grad_(False)
+                self.x_embedder.requires_grad_(False)
+                self.t_embedder.requires_grad_(False)
+                self.final_layers.requires_grad_(False)
+            else:
+                raise ValueError
+
+            # Add to `self.trainable_module_keys`
+            if self.use_diff:
+                self.trainable_module_keys = ["selection_head"]
+
+            # Update Trackers
+            self.vision_backbone_requires_grad = False
+
+            # Explicitly Log Frozen / Unfrozen Components
+            # fmt: off
+            overwatch.info(f"[Frozen]    🥶   =>> Vision Tower 2D ", ctx_level=1)  # noqa: E501
+            overwatch.info(f"[Frozen]    🥶   =>> Vision Tower 3D ", ctx_level=1)  # noqa: E501
+            overwatch.info(f"[Frozen]    🥶   =>> LLM Backbone `{self.llm_backbone.identifier}`", ctx_level=1)  # noqa: E501
+            overwatch.info(f"[Frozen]    🥶   =>> Projector 2D ", ctx_level=1)
+            overwatch.info(f"[Frozen]    🥶   =>> Projector 3D ", ctx_level=1)
+            overwatch.info(f"[TRAINABLE] 🔥 =>> Selection Head ", ctx_level=1)
+            # fmt: on
+
+        elif stage in {"last-layer-finetune", "vla-last-layer-train"}:
+            self.vision_tower_2d.requires_grad_(False)
+            self.vision_tower_3d.requires_grad_(False)
+            self.llm_backbone.requires_grad_(False)
+            self.projector_2d.requires_grad_(False)
+            self.projector_3d.requires_grad_(False)
+
+            # Unfreeze final LLM layer
+            for module in self.llm_backbone.last_layer_finetune_modules:
+                module.requires_grad_(True)
+
+            # Add to `self.trainable_module_keys`
+            self.trainable_module_keys = ["llm_backbone", "proprio_embedder"]
+            if self.use_diff:
+                self.trainable_module_keys.extend(["x_embedder", "t_embedder", "final_layers"])
+
+            # Update Trackers
+            self.vision_backbone_requires_grad = False
+
+            # Explicitly Log Frozen / Unfrozen Components
+            # fmt: off
+            overwatch.info(f"[Frozen]                    🥶   =>> Vision Tower 2D ", ctx_level=1)  # noqa: E501
+            overwatch.info(f"[Frozen]                    🥶   =>> Vision Tower 3D ", ctx_level=1)  # noqa: E501
+            overwatch.info(f"[Frozen, except last layer] 🥶🔥 =>> LLM Backbone `{self.llm_backbone.identifier}`", ctx_level=1)  # noqa: E501
+            overwatch.info(f"[Frozen]                    🥶   =>> Projector 2D ", ctx_level=1)
+            overwatch.info(f"[Frozen]                    🥶   =>> Projector 3D ", ctx_level=1)
+            # fmt: on
+
+        elif stage in {"vla-sandwich-train"}:
+            self.vision_tower_2d.requires_grad_(True)
+            self.vision_tower_3d.requires_grad_(True)
+            self.llm_backbone.requires_grad_(False)
+
+            # Unfreeze final LLM layer
+            for module in self.llm_backbone.last_layer_finetune_modules:
+                module.requires_grad_(True)
+
+            # Add to `self.trainable_module_keys`
+            self.trainable_module_keys = ["vision_tower_2d", "vision_tower_3d", "llm_backbone", "proprio_embedder"]
+            if self.use_diff:
+                self.trainable_module_keys.extend(["x_embedder", "t_embedder", "final_layers"])
+
+            # Update Trackers
+            self.vision_backbone_requires_grad = True
+
+            # Explicitly Log Frozen / Unfrozen Components
+            # fmt: off
+            overwatch.info(f"[TRAINABLE]                 🔥   =>> Vision Tower 2D ", ctx_level=1)  # noqa: E501
+            overwatch.info(f"[TRAINABLE]                 🔥   =>> Vision Tower 3D ", ctx_level=1)  # noqa: E501
+            overwatch.info(f"[Frozen, except last layer] 🥶🔥 =>> LLM Backbone `{self.llm_backbone.identifier}`", ctx_level=1)  # noqa: E501
+            # fmt: on
+
+        else:
+            raise ValueError(f"Stage `{stage}` is not supported for LLaVa! Try < align | finetune >")
+
+        overwatch.debug("##################################################")
+        overwatch.debug("#####      Trainable Network Parameters:     #####")
+        overwatch.debug("##################################################")
+        for name, param in self.named_parameters():
+            if param.requires_grad:
+                overwatch.debug(name)
+
+    def load_from_checkpoint(self, stage: str, run_dir: Path, pretrained_checkpoint: Optional[Path] = None) -> None:
+        """Load weights from checkpoint (if required by the given stage)."""
+        assert stage in {"align", "finetune", "full-finetune"}, f"Stage {stage} is not supported!"
+
+        # If we're running a `no-align` architecture, we're good!
+        if self.arch_specifier.startswith("no-align"):
+            overwatch.info(
+                f"PrismaticVLM with `{self.arch_specifier = }` does not require pretrained weights!", ctx_level=1
+            )
+            return
+
+        # Otherwise, handle stage-specific logic!
+        if stage == "align":
+            overwatch.info("Stage `align` does not require pretrained weights =>> Starting Training", ctx_level=1)
+            return
+
+        # Otherwise, load from `pretrained_checkpoint` or match on `run_dir` (s/+stage-finetune/+stage-align/g)
+        overwatch.info("Stage `finetune` requires `align` pretrained weights", ctx_level=1)
+
+        # Config specifies path to a checkpoint to load
+        if pretrained_checkpoint is not None:
+            overwatch.info(f"Loading from Provided Checkpoint `{pretrained_checkpoint}`", ctx_level=1)
+            model_state_dict = torch.load(pretrained_checkpoint)["model"]
+
+            return
+
+        # [Contract] If no `pretrained_checkpoint`, assume `align` lives in the run directory; string substitution!
+        model, scale, _, seed = run_dir.name.split("+")
+        align_dirs = [
+            d
+            for d in run_dir.parent.iterdir()
+            if (d.name.startswith(f"{model}+{scale}") and d.name.endswith(f"+stage-align+{seed}"))
+        ]
+        assert len(align_dirs) == 1, "Multiple or No Valid Pretrained Directories Exist -- Double Check `runs`!"
+        if (pretrained_checkpoint := (align_dirs[0] / "checkpoints" / "latest-checkpoint.pt")).exists():
+            overwatch.info(f"Loading from Discovered Checkpoint `{pretrained_checkpoint}`", ctx_level=1)
+            model_state_dict = torch.load(pretrained_checkpoint)["model"]
+        else:
+            raise ValueError(f"Could not find valid `align` checkpoint at {pretrained_checkpoint}!")
+
+    def get_fsdp_wrapping_policy(self) -> Callable:
+        """Return an FSDP _or_policy over the policies returned by each individual backbone (and our VLM policy)."""
+        vision_fsdp_wrapping_policy = partial(
+            _module_wrap_policy,
+            module_classes={PointViT, VisionTokenizer, MultiModalAligner},
+        )
+        llm_fsdp_wrapping_policy = self.llm_backbone.get_fsdp_wrapping_policy()
+
+        # Get Prismatic Wrapping Policy =>> just a module wrapping policy around `self.projector`
+        prismatic_fsdp_wrapping_policy = partial(
+            _module_wrap_policy,
+            module_classes={MLP_GELU},
+        )
+
+        # Return union (_or_) over constituent policies
+        #   => Note: there is *not* a fall-through policy; any module that isn't covered by the above constituents will
+        #            automatically be folded into the root VLM FSDP instance.
+        return partial(
+            _or_policy,
+            policies=[
+                vision_fsdp_wrapping_policy,
+                llm_fsdp_wrapping_policy,
+                prismatic_fsdp_wrapping_policy,
+            ],
+        )
+
+
+    def get_image_embedding(
+        self, images
+    ):
+        vision_tower_2d = self.get_vision_tower_2d()
+        if vision_tower_2d is None or images is None:
+            return None, None
+
+        if type(images) is list or images.ndim == 5:
+            concat_images = torch.cat([image for image in images], dim=0)
+            image_features = self.encode_images(concat_images)
+            split_sizes = [image.shape[0] for image in images]
+            image_features = torch.split(image_features, split_sizes, dim=0)
+            image_features = [x.flatten(0, 1) for x in image_features]
+        else:
+            projected_patch_embeddings, patch_hw = self.encode_images(images)
+
+        projected_patch_embeddings = torch.stack(projected_patch_embeddings, dim=0)
+
+        return  projected_patch_embeddings, patch_hw
+    
+    def get_pointcloud_embedding(
+        self, pointcloud
+    ):
+        vision_tower_3d = self.vision_tower_3d
+        if vision_tower_3d is None or pointcloud is None:
+            raise ValueError
+
+        _, _, pointcloud_patch_embeddings = vision_tower_3d(pointcloud)
+
+        projected_patch_embeddings = self.projector_3d(pointcloud_patch_embeddings)  
+
+        return projected_patch_embeddings
+    
+    def get_fused_tokens(
+        self, images, pointcloud
+    ):
+        camera_params = {
+            "K": torch.tensor([
+                [-307.7174807,    0.0,         112.0],
+                [   0.0,        -307.7174807,  112.0],
+                [   0.0,           0.0,          1.0]
+            ], dtype=torch.float32),
+            "R": torch.tensor([
+                [ 1.19209290e-07, -4.22617942e-01, -9.06307936e-01],
+                [-1.00000000e+00, -5.96046448e-07,  1.49011612e-07],
+                [-5.66244125e-07,  9.06307936e-01, -4.22617912e-01]
+            ], dtype=torch.float32),
+            "t": torch.tensor([1.34999919e+00, 3.71546562e-08, 1.57999933e+00], dtype=torch.float32)
+        }
+        # 2D tokens
+        projected_image_tokens, patch_hw = self.encode_images(images)
+        projected_image_tokens = torch.stack(projected_image_tokens, dim=0)
+        # 3D tokens
+        pointcloud_patch_embeddings, pointcloud_centers = self.vision_tower_3d(pointcloud)
+        projected_pointcloud_tokens = self.projector_3d(pointcloud_patch_embeddings)  
+        # print("projected_image_tokens.shape: ", projected_image_tokens.shape)
+        # print("projected_pointcloud_tokens.shape: ", projected_pointcloud_tokens.shape)
+        # print("pointcloud_centers.shape: ", pointcloud_centers.shape)
+        # input("Press Enter to continue...")
+        
+        patch_indices, valid_mask = project_3d_to_2d_672_pyrep_compatible(
+            pointcloud_centers, 
+            camera_params['K'].to(pointcloud_centers.device),
+            camera_params['R'].to(pointcloud_centers.device),
+            camera_params['t'].to(pointcloud_centers.device),
+            image_size_resize=(672, 672),
+            vision_strides={'patch_stride': 14, 'conv_stride': 3}
+        )
+        
+        # save_projection_visualization(
+        #     pointcloud_centers, 
+        #     patch_indices, 
+        #     valid_mask, 
+        #     save_dir="/media/liuzhuoyang/new_vla/5D_VLA_beta/vis", 
+        #     rgb_image=images,
+        # )
+        # input("Press Enter to continue...")
+        
+        N_pc = projected_pointcloud_tokens.shape[1]
+        N_img = projected_image_tokens.shape[1]
+        assert N_pc == N_img # assert that the number of tokens are equal
+        
+        projected_fused_tokens = torch.cat(
+            [projected_pointcloud_tokens, projected_image_tokens], 
+            dim=1
+        )
+
+        return projected_fused_tokens, patch_indices, valid_mask
+    
+    def forward(
+        self,
+        x: Optional[torch.FloatTensor] = None,
+        t: Optional[torch.FloatTensor] = None,
+        z: Optional[torch.FloatTensor] = None,
+        proprio: Optional[torch.FloatTensor] = None,
+        input_ids: Optional[torch.LongTensor] = None,
+        attention_mask: Optional[torch.Tensor] = None,
+        images: Optional[torch.FloatTensor] = None,
+        point_cloud: Optional[torch.FloatTensor] = None,
+        labels: Optional[torch.LongTensor] = None,
+        inputs_embeds: Optional[torch.FloatTensor] = None,
+        past_key_values: Optional[List[torch.FloatTensor]] = None,
+        use_cache: Optional[bool] = None,
+        output_attentions: Optional[bool] = None,
+        output_hidden_states: Optional[bool] = True,
+        return_dict: Optional[bool] = None,
+        multimodal_indices: Optional[torch.LongTensor] = None,
+        gen_discret_action:  Optional[torch.LongTensor] = None,
+        use_diff: Optional[bool] = None,
+        **kwargs,
+    ): 
+        """Run a forward pass through the VLM, returning a CausalLMOutputWithPast instance (contains loss)."""
+        # Handle Inference (leverage cache, short-circuit on just LLM forward)
+        if use_diff is not None:
+            self.use_diff = use_diff
+        if proprio is not None:
+            proprio = proprio.to(torch.bfloat16)
+        if x is not None:
+            x = x.to(torch.bfloat16)
+        if t is not None:
+            t = t.to(torch.bfloat16)
+        if z is not None:
+            z = z.to(torch.bfloat16)
+        
+        if self.training:
+            tag_0, tag_1 = 2, 0
+            tag_2 = 3 ## EOD(32002) + _(29871) + 7dof + EOS(2)
+        else:
+            # tag_0, tag_1 = 32001, -1
+            # tag_2 = 0
+            tag_0, tag_1 = 29871, -1
+            tag_2 = 0
+        
+        if input_ids.shape[1] == 1 and past_key_values is not None:
+            output = self.llm_backbone(
+                input_ids=input_ids,
+                attention_mask=None,
+                position_ids=None,
+                past_key_values=past_key_values,
+                inputs_embeds=None,
+                labels=None,
+                use_cache=use_cache,
+                output_attentions=output_attentions,
+                output_hidden_states=True,
+                return_dict=return_dict,
+            )
+            return output
+
+        elif input_ids.shape[1] == 1 or images is None:
+            raise RuntimeError("Invalid `forward()` call!")
+
+        # Handle Multimodal Indices is None --> pretend like the batch is fully multimodal (always image + text)!
+        if multimodal_indices is None:
+            multimodal_indices = torch.arange(len(input_ids), dtype=torch.long, device=input_ids.device)
+        # Handle Multimodal Indices is Empty (len == 0) --> simple unimodal forward
+        elif len(multimodal_indices) == 0:
+            output = self.llm_backbone(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                position_ids=None,
+                past_key_values=past_key_values,
+                inputs_embeds=None,
+                labels=labels,
+                use_cache=use_cache,
+                output_attentions=output_attentions,
+                output_hidden_states=output_hidden_states,
+                return_dict=return_dict,
+            )
+            return output, None
+        
+        _input_ids = input_ids
+        
+        # get image and point_cloud embeddings
+        point_cloud = point_cloud.to(self.device) 
+        projected_fused_embeddings, patch_indices, valid_mask= self.get_fused_tokens(images, point_cloud) # 注意返回了token的数量
+        # projected_fused_embeddings= self.get_fused_tokens(images, point_cloud) # 注意返回了token的数量
+        input_embeddings = self.llm_backbone.embed_input_ids(input_ids)
+        z = torch.cat([input_embeddings[:, :1, :], 
+                       projected_fused_embeddings, 
+                       input_embeddings[:, 1:, :]], dim=1
+                    )
+        
+        N_pc = projected_fused_embeddings.shape[1] // 2
+        N_img = projected_fused_embeddings.shape[1] // 2
+        bos_token_len = 1
+        pc_tokens_start_idx = bos_token_len
+        pc_tokens_end_idx = pc_tokens_start_idx + N_pc
+        img_tokens_start_idx = pc_tokens_end_idx
+        img_tokens_end_idx = img_tokens_start_idx + N_img
+
+        proprio = self.proprio_embedder(proprio)
+        if self.use_diff:
+            z = self.z_embedder(z, self.training)
+            x = self.x_embedder(x)
+            t = self.t_embedder(t).unsqueeze(1) if t is not None else None
+        
+        multimodal_embeddings = []
+        multimodal_attention_mask = []
+        multimodal_labels = []
+        last_true_indices = []
+        if attention_mask is not None:
+            projected_patch_attention_mask_fused = torch.full(
+                (projected_fused_embeddings.shape[0], projected_fused_embeddings.shape[1]),
+                True,
+                dtype=attention_mask.dtype,
+                device=attention_mask.device,
+            )
+        if labels is not None: 
+            projected_patch_labels_fused = torch.full(
+                (projected_fused_embeddings.shape[0], projected_fused_embeddings.shape[1]),
+                IGNORE_INDEX,
+                dtype=labels.dtype,
+                device=labels.device,
+            )
+
+        for indice in multimodal_indices:
+            if self.use_diff:
+                last_true_indice = torch.where(input_ids[indice] == tag_0)[tag_1][-1].item() + projected_fused_embeddings.shape[1]
+                last_true_indices.append(last_true_indice)
+                # print("z[indice, :last_true_indice, :].shape[0]",z[indice, :last_true_indice, :].shape[0])
+                # input()
+                # print("proprio[indice].shape[0]",proprio[indice].shape[0])
+                # input()
+                # print("t[indice].shape[0]",t[indice].shape[0])
+                # input()
+                # print("x[indice].shape[0]",x[indice].shape[0])
+                # input()
+                # print("z[indice, last_true_indice:, :].shape[0]",z[indice, last_true_indice:, :].shape[0])
+                # input()
+                embed = torch.cat([
+                    z[indice, :last_true_indice, :],
+                    proprio[indice],
+                    t[indice] if t is not None else torch.zeros_like(proprio[indice]),
+                    x[indice],
+                    z[indice, last_true_indice:, :],
+                ], dim=0).unsqueeze(0)
+                multimodal_embeddings.append(embed)
+            else:
+                multimodal_embeddings.append(z[indice].unsqueeze(0))
+                
+            if attention_mask is not None:
+                if self.use_diff:
+                    attn_mask = torch.cat([
+                        attention_mask[indice, :1],
+                        projected_patch_attention_mask_fused[indice],
+                        attention_mask[indice, 1:last_true_indice - projected_fused_embeddings.shape[1]],
+                        torch.ones((proprio.shape[1]), dtype=torch.bool).to(projected_patch_attention_mask_fused.device),
+                        torch.ones((t.shape[1] if t is not None else 0), dtype=torch.bool).to(projected_patch_attention_mask_fused.device),
+                        torch.ones((x.shape[1]), dtype=torch.bool).to(projected_patch_attention_mask_fused.device),
+                        attention_mask[indice, last_true_indice - projected_fused_embeddings.shape[1]:],
+                    ], dim=0).unsqueeze(0)
+                else:
+                    attn_mask = torch.cat(
+                        [
+                            attention_mask[indice, :1],
+                            projected_patch_attention_mask_fused[indice],
+                            attention_mask[indice, 1:],
+                        ],
+                        dim=0,
+                    ).unsqueeze(0)
+                multimodal_attention_mask.append(attn_mask)
+
+            if labels is not None:
+                if self.use_diff:
+                    label = torch.cat([
+                        labels[indice, :1],
+                        projected_patch_labels_fused[indice],
+                        labels[indice, 1:last_true_indice - projected_fused_embeddings.shape[1]],
+                        torch.full((proprio.shape[1],), -100).to(projected_patch_labels_fused.device),
+                        torch.full((t.shape[1] if t is not None else 0,), -100).to(projected_patch_labels_fused.device),
+                        torch.full((x.shape[1],), -100).to(projected_patch_labels_fused.device),
+                        labels[indice, last_true_indice - projected_fused_embeddings.shape[1]:],
+                    ], dim=0).unsqueeze(0)
+                else:
+                    label = torch.cat(
+                        [
+                            labels[indice, :1],
+                            projected_patch_labels_fused[indice],
+                            labels[indice, 1:],
+                        ],
+                        dim=0,
+                    ).unsqueeze(0)
+                multimodal_labels.append(label)
+                
+        multimodal_embeddings = torch.cat(multimodal_embeddings, dim=0)
+        multimodal_attention_mask = torch.cat(multimodal_attention_mask, dim=0) if len(multimodal_attention_mask) !=0 else None
+        multimodal_labels = torch.cat(multimodal_labels, dim=0) if len(multimodal_labels) !=0 else None
+
+        # === Add Unimodal Handling ===
+        # Create Fused Embeddings, Attention Mask, and Labels by Merging with "unimodal" Inputs (if applicable)
+        unimodal_indices = torch.tensor(
+            [idx for idx in range(len(input_ids)) if idx not in multimodal_indices],
+            dtype=torch.long,
+            device=multimodal_indices.device,
+        )
+
+        # No "unimodal" data --> Fused == Multimodal
+        if len(unimodal_indices) == 0:
+            fused_embeddings = multimodal_embeddings
+            fused_attention_mask = multimodal_attention_mask
+            fused_labels = multimodal_labels
+
+        else:
+            input("pause")
+            # Otherwise --> Merge w/ unimodal data
+            # This doesn't matter --> but in the "normal" case this is the embedding of the <PAD> token
+            #   => NOTE :: Verified that `zeros/randn/empty/<PAD> embedding` all return the same result!
+            unimodal_embeddings_pad = torch.zeros(
+                (len(unimodal_indices), projected_fused_embeddings.shape[1], input_embeddings.shape[2]),
+                dtype=input_embeddings.dtype,
+                device=input_embeddings.device,
+            )
+            unimodal_attention_pad = torch.full(
+                (len(unimodal_indices), projected_fused_embeddings.shape[1]),
+                False,
+                dtype=attention_mask.dtype,
+                device=attention_mask.device,
+            )
+            unimodal_labels_pad = torch.full(
+                (len(unimodal_indices), projected_fused_embeddings.shape[1]),
+                IGNORE_INDEX,
+                dtype=labels.dtype,
+                device=labels.device,
+            )
+
+            unimodal_embeddings = torch.cat([input_embeddings[unimodal_indices], unimodal_embeddings_pad], dim=1)
+            unimodal_attention_mask = torch.cat([attention_mask[unimodal_indices], unimodal_attention_pad], dim=1)
+            unimodal_labels = torch.cat([labels[unimodal_indices], unimodal_labels_pad], dim=1)
+
+            # Create "Fused" Tensors by Stacking Multimodal & Unimodal
+            fused_embeddings = torch.vstack([multimodal_embeddings, unimodal_embeddings])
+            fused_attention_mask = torch.vstack([multimodal_attention_mask, unimodal_attention_mask])
+            fused_labels = torch.vstack([multimodal_labels, unimodal_labels])
+        
+        # Run LLM Forward --> returns CausalLMOutputWithPast!
+        output: CausalLMOutputWithPast = self.llm_backbone(
+            input_ids=None,
+            attention_mask=fused_attention_mask,
+            position_ids=None,
+            past_key_values=past_key_values,
+            inputs_embeds=fused_embeddings,
+            labels=fused_labels,
+            use_cache=use_cache,
+            output_attentions=output_attentions,
+            output_hidden_states=True,
+            return_dict=True,
+            pc_token_indices=(pc_tokens_start_idx, pc_tokens_end_idx),
+            img_token_indices=(img_tokens_start_idx, img_tokens_end_idx),
+            patch_correspondence_indices=patch_indices,
+            correspondence_valid_mask=valid_mask,
+            compute_token_contrastive_loss=True, 
+        )
+        
+        # if self.use_diff:
+        #     last_hidden = output.hidden_states[-1]
+        #     last_hidden = self.final_layer(last_hidden)
+            
+        #     # Compute action output
+        #     action_out = []
+        #     for i, indices in enumerate(last_true_indices):
+        #         action_start = int(indices) + 2
+        #         action_end = int(indices) + self.future_action_window_size + 3
+        #         action_out.append(last_hidden[i, action_start:action_end, :].unsqueeze(0))
+            
+        #     action_out = torch.cat(action_out, dim=0)
+        #     return output, action_out
+    
+        if self.use_diff:
+            selected_hidden_states = [
+                output.hidden_states[-7],  # layer 26, [B, n_tokens, 4096]
+                output.hidden_states[-5],  # layer 28
+                output.hidden_states[-3],  # layer 30
+                output.hidden_states[-1]   # layer 32
+            ]
+            action_out_total = []
+            # --- 【新增】用于收集selection_head输入特征的列表 ---
+            selection_features_per_layer = []
+            for i, hidden in enumerate(selected_hidden_states):
+                last_hidden = self.final_layers[i](hidden)  # 使用对应的final_layer, [B, n_tokens, 7]
+                
+                # Compute action output for this layer
+                layer_action_out = []
+                layer_selection_features = [] # 存储当前层每个样本的特征
+                
+                for j, indices in enumerate(last_true_indices):
+                    action_start = int(indices) + 2
+                    action_end = int(indices) + self.future_action_window_size + 3
+                    noise_pred_window = last_hidden[j, action_start:action_end, :] # [n_noise, 7]
+                    layer_action_out.append(noise_pred_window.unsqueeze(0)) 
+                    
+                    noise_select_window = hidden[j, action_start:action_end, :] # [1, 4096]y
+                    selection_feature = torch.mean(noise_select_window, dim=0) # [4096]y
+                    layer_selection_features.append(selection_feature.unsqueeze(0)) # [B, 4096]
+                
+                action_out_total.append(torch.cat(layer_action_out, dim=0)) # [B, n_noise, 7]
+                selection_features_per_layer.append(torch.cat(layer_selection_features, dim=0)) # [4, B, 4096]
+            
+            # Stack all layer predictions
+            action_out = torch.stack(action_out_total, dim=0)  # shape: [4, batch_size, n_noise, 7]
+            
+            # # tmp
+            # action_out = torch.mean(torch.stack(action_out_total, dim=0), dim=0)
+            # return output, action_out
+
+            # selection_features_per_layer 是一个包含4个 [B, D] 张量的列表
+            # 我们将这4个张量在特征维度上拼接
+            stacked_features = torch.stack(selection_features_per_layer, dim=0) # [4, B, 4096]
+            transposed_features = stacked_features.transpose(0, 1) # [B, 4, 4096]
+            fused_selection_features = transposed_features.reshape(transposed_features.size(0), -1) # [B, 4*4096]
+            
+            # print(fused_selection_features.shape)
+            # input()
+            # 通过Norm和Head得到最终的分类logits
+            selection_logits = self.selection_head(fused_selection_features) # [B, 4]
+            
+            if self.training:
+                return output, action_out, selection_logits
+            else:
+                best_head_indices = torch.argmax(selection_logits, dim=1)
+                batch_size = action_out.shape[1]
+                batch_indices = torch.arange(batch_size, device=action_out.device)
+                final_action_out = action_out[int(best_head_indices)]
+                # print(action_out.shape)
+                print("best_head_indice: ",best_head_indices)
+                # print(final_action_out.shape)
+                # input()
+                return output, final_action_out
+        
+        return output # autoregressive
+        
+        
+    def prepare_inputs_for_generation(
+        self,
+        input_ids: Optional[torch.LongTensor] = None,
+        attention_mask: Optional[torch.Tensor] = None,
+        images: Optional[torch.FloatTensor] = None,
+        point_cloud: Optional[torch.FloatTensor] = None,
+        proprio: Optional[torch.FloatTensor] = None,
+        inputs_embeds: Optional[torch.FloatTensor] = None,
+        past_key_values: Optional[List[torch.FloatTensor]] = None,
+        use_cache: Optional[bool] = None,
+        gen_discret_action: Optional[bool] = None,
+        ar_infer: Optional[bool] = None,
+        **kwargs: torch.Tensor,
+    ) -> Dict[str, torch.Tensor]:
+        """Borrowed from `LlamaForCausalLM` --> in general, just handles caching logic during generation."""
+        if past_key_values:
+            input_ids = input_ids[:, -1:]
+
+        # if `inputs_embeds` are passed, we only want to use them in the 1st generation step
+        if inputs_embeds is not None and past_key_values is None:
+            model_inputs = {"inputs_embeds": inputs_embeds}
+        else:
+            model_inputs = {"input_ids": input_ids}
+        
+        model_inputs.update({'gen_discret_action': gen_discret_action})
+        model_inputs.update({'ar_infer': ar_infer})
+
+        if "x" in kwargs:
+            model_inputs.update({'x': kwargs['x']})
+        if "proprio" in kwargs:
+            model_inputs.update({'proprio': kwargs['proprio']})
+        if "t" in kwargs:
+            model_inputs.update({'t': kwargs['t']})
+
+        # Make sure `pixel_values` are preserved in `model_inputs`
+        model_inputs.update(
+            {
+                "attention_mask": attention_mask,
+                "images": images,
+                "point_cloud": point_cloud,
+                "proprio": proprio,
+                "past_key_values": past_key_values,
+                "use_cache": use_cache,
+            }
+        )
+        
+        print(model_inputs)
+        input()
+
+        return model_inputs
+
+    @torch.inference_mode()
+    def generate_batch(
+        self,
+        pixel_values: Union[torch.Tensor, Dict[str, torch.Tensor]],
+        texts: List[str],
+        return_string_probabilities: Optional[List[str]] = None,
+        **kwargs: str,
+    ) -> Union[List[str], List[List[float]]]:
+        # For now, only support generation with a batch size of 1 for simplicity
+        tokenizer = self.llm_backbone.tokenizer
+
+        # Prepare Inputs
+        batch_input_ids = [
+            tokenizer(text, truncation=True, return_tensors="pt").input_ids.to(self.device) for text in texts
+        ]
+        if isinstance(pixel_values, torch.Tensor):
+            pixel_values = pixel_values[None, ...].to(self.device)
+        elif isinstance(pixel_values, dict):
+            pixel_values = {k: v[None, ...].to(self.device) for k, v in pixel_values.items()}
+        else:
+            raise ValueError(f"Unsupported `pixel_values` type = {type(pixel_values)}")
+
+        # Create Output Lists
+        gen_texts, gen_probabilities = [], []
+
+        # Invoke super().generate --> taps into `GenerationMixin` which (redirects) to `forward()`
+        autocast_dtype = self.llm_backbone.half_precision_dtype
+        with torch.autocast("cuda", dtype=autocast_dtype, enabled=self.enable_mixed_precision_training):
+            for idx, input_ids in enumerate(batch_input_ids):
+                if isinstance(pixel_values, torch.Tensor):
+                    pixel_values = pixel_values[idx]
+                elif isinstance(pixel_values, dict):
+                    pixel_values = {k: pixel_values[k][idx] for k in pixel_values}
+                else:
+                    raise ValueError(f"Unsupported `pixel_values` type = {type(pixel_values)}")
+
+                # Handle `return_string_probabilities`
+                if return_string_probabilities is None:
+                    full_out_ids = super().generate(input_ids=input_ids, pixel_values=pixel_values, **kwargs)
+                    gen_ids = full_out_ids[0, input_ids.shape[1] :]
+
+                    # Decode `gen_ids` and strip any <EOS> tokens
+                    gen_texts.append(tokenizer.decode(gen_ids, skip_special_tokens=True).strip())
+
+                else:
+                    full_out_dict = super().generate(
+                        input_ids=input_ids,
+                        pixel_values=pixel_values,
+                        output_scores=True,
+                        return_dict_in_generate=True,
+                        **kwargs,
+                    )
+
+                    # Generation pattern should usually be [TOKEN] <EOS> for True/False and Yes/No Generations
+                    gen_ids = full_out_dict.sequences[0, input_ids.shape[1] :]
+
+                    # [Debug] Verify that the first token generated is in `self.string2idx.values()`
+                    # assert gen_ids[0] in self.string2idx.values(), "Generated ID not in mapping!"
+
+                    # Decode `gen_ids` and strip any <EOS> tokens
+                    gen_texts.append(tokenizer.decode(gen_ids, skip_special_tokens=True).strip())
+
+                    # Get all token probabilities --> softmax over logits
+                    token_probs = torch.softmax(full_out_dict.scores[0][0], dim=0)
+
+                    # Get *normalized* probabilities for all values in `return_token_probabilities`
+                    slice_idxs = torch.tensor([self.string2idx[s] for s in return_string_probabilities])
+                    string_probs_unnormalized = token_probs[slice_idxs]
+                    string_probs = string_probs_unnormalized / string_probs_unnormalized.sum()
+                    gen_probabilities.append(string_probs.cpu().numpy().tolist())
+
+        return gen_texts if return_string_probabilities is None else gen_probabilities
+
+    @torch.inference_mode()
+    def generate(self, image: Image, prompt_text: str, **kwargs: str) -> str:
+        # For now, only support generation with a batch size of 1 for simplicity
+        image_transform, tokenizer = self.vision_backbone.image_transform, self.llm_backbone.tokenizer
+
+        # Prepare Inputs
+        input_ids = tokenizer(prompt_text, truncation=True, return_tensors="pt").input_ids.to(self.device)
+        pixel_values = image_transform(image)
+        if isinstance(pixel_values, torch.Tensor):
+            pixel_values = pixel_values[None, ...].to(self.device)
+        elif isinstance(pixel_values, dict):
+            pixel_values = {k: v[None, ...].to(self.device) for k, v in pixel_values.items()}
+        else:
+            raise ValueError(f"Unsupported `pixel_values` type = {type(pixel_values)}")
+
+        # Invoke super().generate --> taps into `GenerationMixin` which (redirects) to `forward()`
+        autocast_dtype = self.llm_backbone.half_precision_dtype
+        with torch.autocast("cuda", dtype=autocast_dtype, enabled=self.enable_mixed_precision_training):
+            # fmt: off
+            generated_ids = super().generate(
+                input_ids=input_ids,            # Shape: [1, seq]
+                pixel_values=pixel_values,      # Shape: [1, 3, res, res] or Dict[str, Shape[1, 3, res, res]]
+                **kwargs
+            )
+            # fmt: on
+
+        generated_text = tokenizer.decode(generated_ids[0, input_ids.shape[1] :], skip_special_tokens=True).strip()
+
+        return generated_text

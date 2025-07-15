@@ -1,0 +1,19 @@
+# ninja log v5
+0	10289	1743133150440249387	/share/lzy/new_vla/3D_VLA_beta/CogACT/vlm/prismatic/cpp/pointnet2_batch/build/temp.linux-x86_64-cpython-310/src/group_points.o	9f0bccbe238c91bb
+0	10455	1743133150606809419	/share/lzy/new_vla/3D_VLA_beta/CogACT/vlm/prismatic/cpp/pointnet2_batch/build/temp.linux-x86_64-cpython-310/src/ball_query.o	c619a46cf2548fd1
+0	10537	1743133150688164910	/share/lzy/new_vla/3D_VLA_beta/CogACT/vlm/prismatic/cpp/pointnet2_batch/build/temp.linux-x86_64-cpython-310/src/interpolate.o	7bab3d8aa5ad32b
+1	10657	1743133150809071836	/share/lzy/new_vla/3D_VLA_beta/CogACT/vlm/prismatic/cpp/pointnet2_batch/build/temp.linux-x86_64-cpython-310/src/sampling.o	626166fb0bd115c7
+0	21596	1743133161746405620	/share/lzy/new_vla/3D_VLA_beta/CogACT/vlm/prismatic/cpp/pointnet2_batch/build/temp.linux-x86_64-cpython-310/src/interpolate_gpu.o	eacc82709d8f33af
+0	21618	1743133161768954802	/share/lzy/new_vla/3D_VLA_beta/CogACT/vlm/prismatic/cpp/pointnet2_batch/build/temp.linux-x86_64-cpython-310/src/ball_query_gpu.o	695b86622ef54c20
+0	21945	1743133162095165797	/share/lzy/new_vla/3D_VLA_beta/CogACT/vlm/prismatic/cpp/pointnet2_batch/build/temp.linux-x86_64-cpython-310/src/group_points_gpu.o	9a1d5016dc63ccd5
+1	22113	1743133162263792404	/share/lzy/new_vla/3D_VLA_beta/CogACT/vlm/prismatic/cpp/pointnet2_batch/build/temp.linux-x86_64-cpython-310/src/sampling_gpu.o	bc63844eec8c0e29
+1	23229	1743133163371955487	/share/lzy/new_vla/3D_VLA_beta/CogACT/vlm/prismatic/cpp/pointnet2_batch/build/temp.linux-x86_64-cpython-310/src/pointnet2_api.o	30a5a17705013a31
+21	10847	1743134951084410806	/share/lzy/new_vla/3D_VLA_beta/CogACT/vlm/prismatic/cpp/pointnet2_batch/build/temp.linux-x86_64-cpython-310/src/ball_query.o	9143fd1de3364f4d
+22	10992	1743134951228277880	/share/lzy/new_vla/3D_VLA_beta/CogACT/vlm/prismatic/cpp/pointnet2_batch/build/temp.linux-x86_64-cpython-310/src/sampling.o	d3a133f9239b83a2
+22	11103	1743134951340185121	/share/lzy/new_vla/3D_VLA_beta/CogACT/vlm/prismatic/cpp/pointnet2_batch/build/temp.linux-x86_64-cpython-310/src/interpolate.o	a32ec8e75f6dc5c3
+22	11235	1743134951473151419	/share/lzy/new_vla/3D_VLA_beta/CogACT/vlm/prismatic/cpp/pointnet2_batch/build/temp.linux-x86_64-cpython-310/src/group_points.o	3c731a6ca2d266f7
+21	20014	1743134960255309653	/share/lzy/new_vla/3D_VLA_beta/CogACT/vlm/prismatic/cpp/pointnet2_batch/build/temp.linux-x86_64-cpython-310/src/ball_query_gpu.o	ba6dd493b63071f8
+22	20407	1743134960648749026	/share/lzy/new_vla/3D_VLA_beta/CogACT/vlm/prismatic/cpp/pointnet2_batch/build/temp.linux-x86_64-cpython-310/src/interpolate_gpu.o	c119f30905b8e17e
+22	20827	1743134961068781575	/share/lzy/new_vla/3D_VLA_beta/CogACT/vlm/prismatic/cpp/pointnet2_batch/build/temp.linux-x86_64-cpython-310/src/group_points_gpu.o	6d304d093ec71ce0
+22	20975	1743134961217080565	/share/lzy/new_vla/3D_VLA_beta/CogACT/vlm/prismatic/cpp/pointnet2_batch/build/temp.linux-x86_64-cpython-310/src/sampling_gpu.o	12c6bffea8cc767c
+22	22849	1743134963079508373	/share/lzy/new_vla/3D_VLA_beta/CogACT/vlm/prismatic/cpp/pointnet2_batch/build/temp.linux-x86_64-cpython-310/src/pointnet2_api.o	9eb013842216db72
