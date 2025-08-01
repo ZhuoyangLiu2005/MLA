@@ -29,17 +29,9 @@ from prismatic.models.vlms.base_vlm import VLM
 from prismatic.overwatch import initialize_overwatch
 from prismatic.util.nn_utils import FusedMLPProjector, LinearProjector, MLPProjector
 
-# 新加入的2D视觉处理模块
 from prismatic.models.eve_tokenizer.vision_tokenizer import VisionTokenizer
 from prismatic.models.eve_tokenizer.vision_tokenizer import MLP_GELU
-from prismatic.models.fuser.fuser import MultiModalAligner, PerceiverAligner
 from prismatic.models.fuser.contrastive import project_3d_to_2d, project_3d_to_2d_672_pyrep_compatible
-# from prismatic.models.fuser.selection import SelectionHead
-from prismatic.models.constants import (DEFAULT_IM_END_TOKEN, DEFAULT_IM_START_TOKEN,
-                               DEFAULT_IMAGE_PATCH_TOKEN, IGNORE_INDEX,
-                               IMAGE_TOKEN_INDEX)
-
-# 新加入的3D视觉处理模块
 from prismatic.a2pmodels.backbone.pointvit import PointViT
 
 from action_model import ActionEmbedder, TimestepEmbedder, LabelEmbedder, FinalLayer
@@ -51,7 +43,7 @@ overwatch = initialize_overwatch(__name__)
 import matplotlib.pyplot as plt
 import numpy as np
 import os
-from mpl_toolkits.mplot3d import Axes3D   # ⬆️ NEW
+from mpl_toolkits.mplot3d import Axes3D  
 
 
 def save_projection_visualization(
@@ -65,7 +57,6 @@ def save_projection_visualization(
     background_alpha=0.4  # 新增参数：背景透明度
 ):
     """
-    保存3D点投影到2D图像、Patch索引热力图，以及3D点云分布（新增）。
     
     Args:
         xyz_3d:        世界坐标系的3D点 [B, N, 3] (N=256)
@@ -77,7 +68,6 @@ def save_projection_visualization(
     """
     os.makedirs(save_dir, exist_ok=True)
     
-    # 仅处理 batch 中第 0 个样本
     xyz_3d = xyz_3d[0].cpu().numpy()             # [256, 3]
     patch_indices = patch_indices[0].cpu().numpy()  # [256, 2]
     valid_mask = valid_mask[0].cpu().numpy()        # [256]
@@ -87,31 +77,25 @@ def save_projection_visualization(
     H, W = image_size
     patch_h, patch_w = H // total_stride, W // total_stride
 
-    # ---------- 图 1：2D 投影 ----------
     fig1, ax1 = plt.subplots(figsize=(10, 10))
     ax1.set_title("2D Projection & Valid Points")
     ax1.set_xlim(0, W); ax1.set_ylim(H, 0)
     ax1.grid(color='gray', linestyle=':', alpha=0.5)
     
-    # 添加RGB背景（如果提供）
     if rgb_image is not None:
-        # 确保图像尺寸匹配
         print(rgb_image)
         if rgb_image.shape[:2] == (H, W):
-            # 归一化到[0,1]范围并调整透明度
             ax1.imshow(rgb_image.astype(np.float32), 
                       extent=[0, W, H, 0], 
                       alpha=background_alpha)
         else:
             print(f"Warning: RGB image size {rgb_image.shape} doesn't match {image_size}")
 
-    # 网格
     for x in range(0, W, total_stride):
         ax1.axvline(x, color='red', alpha=0.2)
     for y in range(0, H, total_stride):
         ax1.axhline(y, color='red', alpha=0.2)
 
-    # 散点
     for i in range(len(xyz_3d)):
         color, alpha, label = ("green", 0.7, "Valid") if valid_mask[i] else ("red", 0.3, "Invalid")
         ax1.scatter(
@@ -126,7 +110,6 @@ def save_projection_visualization(
     fig1.savefig(os.path.join(save_dir, "2d_projection.png"), dpi=120, bbox_inches="tight")
     plt.close(fig1)
 
-    # ---------- 图 2：Patch 热力图 ----------
     heatmap = np.zeros((patch_h, patch_w), dtype=int)
     for r, c in patch_indices[valid_mask]:
         heatmap[r, c] += 1
@@ -134,15 +117,12 @@ def save_projection_visualization(
     fig2, ax2 = plt.subplots(figsize=(10, 10))
     ax2.set_title("Patch Indices Heatmap (with RGB Background)")
     
-    # 添加RGB背景（如果提供）
     if rgb_image is not None:
-        # 下采样到热力图尺寸
         bg_resized = rgb_image[::total_stride, ::total_stride]
         ax2.imshow(bg_resized.astype(np.float32), 
                   alpha=background_alpha, 
                   extent=[0, patch_w, patch_h, 0])
     
-    # 热力图（叠加在背景上）
     im = ax2.imshow(heatmap, cmap="viridis", origin="upper", alpha=0.7)
     ax2.set_xticks(np.arange(patch_w)); ax2.set_yticks(np.arange(patch_h))
     ax2.set_xlabel("Patch Column"); ax2.set_ylabel("Patch Row")
@@ -150,7 +130,6 @@ def save_projection_visualization(
     fig2.savefig(os.path.join(save_dir, "patch_heatmap_with_bg.png"), dpi=120, bbox_inches="tight")
     plt.close(fig2)
 
-    # ---------- 图 3：3D 点云散点图 ----------
     fig3 = plt.figure(figsize=(10, 10))
     ax3 = fig3.add_subplot(111, projection='3d')
     ax3.set_title("3D Patch Centers")
@@ -159,7 +138,6 @@ def save_projection_visualization(
         c='steelblue', s=30, depthshade=True
     )
     ax3.set_xlabel("X"); ax3.set_ylabel("Y"); ax3.set_zlabel("Z")
-    # 让三轴比例一致（可选）
     max_range = (xyz_3d.max(axis=0) - xyz_3d.min(axis=0)).max() / 2.0
     mid = xyz_3d.mean(axis=0)
     ax3.set_xlim(mid[0] - max_range, mid[0] + max_range)
@@ -169,97 +147,6 @@ def save_projection_visualization(
     plt.close(fig3)
 
     print(f"Visualization saved to: {os.path.abspath(save_dir)}/")
-
-def save_projection_visualization_ori(
-    xyz_3d, 
-    patch_indices, 
-    valid_mask, 
-    image_size=(672, 672), 
-    total_stride=42,
-    save_dir="projection_visualization",
-):
-    """
-    保存3D点投影到2D图像、Patch索引热力图，以及3D点云分布（新增）。
-    
-    Args:
-        xyz_3d:        世界坐标系的3D点 [B, N, 3] (N=256)
-        patch_indices: 投影后的Patch索引 [B, N, 2] (row, col)
-        valid_mask:    有效性掩码 [B, N]
-        image_size:    图像分辨率 (H, W)
-        total_stride:  总步长 (e.g., 42)
-        save_dir:      保存目录（自动创建）
-    """
-    os.makedirs(save_dir, exist_ok=True)
-    
-    # 仅处理 batch 中第 0 个样本
-    xyz_3d = xyz_3d[0].cpu().numpy()             # [256, 3]
-    patch_indices = patch_indices[0].cpu().numpy()  # [256, 2]
-    valid_mask = valid_mask[0].cpu().numpy()        # [256]
-
-    H, W = image_size
-    patch_h, patch_w = H // total_stride, W // total_stride
-
-    # ---------- 图 1：2D 投影 ----------
-    fig1, ax1 = plt.subplots(figsize=(10, 10))
-    ax1.set_title("2D Projection & Valid Points")
-    ax1.set_xlim(0, W); ax1.set_ylim(H, 0)
-    ax1.grid(color='gray', linestyle=':', alpha=0.5)
-
-    # 网格
-    for x in range(0, W, total_stride):
-        ax1.axvline(x, color='red', alpha=0.2)
-    for y in range(0, H, total_stride):
-        ax1.axhline(y, color='red', alpha=0.2)
-
-    # 散点
-    for i in range(len(xyz_3d)):
-        color, alpha, label = ("green", 0.7, "Valid") if valid_mask[i] else ("red", 0.3, "Invalid")
-        ax1.scatter(
-            patch_indices[i, 1] * total_stride,
-            patch_indices[i, 0] * total_stride,
-            color=color,
-            s=50,
-            alpha=alpha,
-            label=label if i == 0 else None,
-        )
-    ax1.legend(loc="upper right")
-    fig1.savefig(os.path.join(save_dir, "2d_projection.png"), dpi=120, bbox_inches="tight")
-    plt.close(fig1)
-
-    # ---------- 图 2：Patch 热力图 ----------
-    heatmap = np.zeros((patch_h, patch_w), dtype=int)
-    for r, c in patch_indices[valid_mask]:
-        heatmap[r, c] += 1
-
-    fig2, ax2 = plt.subplots(figsize=(10, 10))
-    ax2.set_title("Patch Indices Heatmap")
-    im = ax2.imshow(heatmap, cmap="viridis", origin="upper")
-    ax2.set_xticks(np.arange(patch_w)); ax2.set_yticks(np.arange(patch_h))
-    ax2.set_xlabel("Patch Column"); ax2.set_ylabel("Patch Row")
-    plt.colorbar(im, ax=ax2, label="Point Count")
-    fig2.savefig(os.path.join(save_dir, "patch_heatmap.png"), dpi=120, bbox_inches="tight")
-    plt.close(fig2)
-
-    # ---------- 图 3：3D 点云散点图 ----------
-    fig3 = plt.figure(figsize=(10, 10))
-    ax3 = fig3.add_subplot(111, projection='3d')
-    ax3.set_title("3D Patch Centers")
-    ax3.scatter(
-        xyz_3d[:, 0], xyz_3d[:, 1], xyz_3d[:, 2],
-        c='steelblue', s=30, depthshade=True
-    )
-    ax3.set_xlabel("X"); ax3.set_ylabel("Y"); ax3.set_zlabel("Z")
-    # 让三轴比例一致（可选）
-    max_range = (xyz_3d.max(axis=0) - xyz_3d.min(axis=0)).max() / 2.0
-    mid = xyz_3d.mean(axis=0)
-    ax3.set_xlim(mid[0] - max_range, mid[0] + max_range)
-    ax3.set_ylim(mid[1] - max_range, mid[1] + max_range)
-    ax3.set_zlim(mid[2] - max_range, mid[2] + max_range)
-    fig3.savefig(os.path.join(save_dir, "3d_pointcloud.png"), dpi=120, bbox_inches="tight")
-    plt.close(fig3)
-
-    print(f"Visualization saved to: {os.path.abspath(save_dir)}/")
-    
 
 
 class PrismaticVLM(VLM):
@@ -268,7 +155,7 @@ class PrismaticVLM(VLM):
         model_id: str,
         llm_backbone: LLMBackbone,
         enable_mixed_precision_training: bool = True,
-        in_channels = 7,
+        action_dim = 7,
         token_size = 4096,
         future_action_window_size=0,
         past_action_window_size=0,
@@ -297,11 +184,10 @@ class PrismaticVLM(VLM):
             assert len(token_idx_list) == 1, f'String "{trigger_string}" is tokenized as more than one token!'
             self.string2idx[trigger_string] = token_idx_list[0]
 
-        # DiT
         self.norm_stats = norm_stats
         self.class_dropout_prob = class_dropout_prob
         self.future_action_window_size = future_action_window_size
-        self.action_dim = in_channels
+        self.action_dim = action_dim
         
         self.mm_hidden_size = 1024 # 注意后面要看这个到底是多少
         self.vision_tower_2d = VisionTokenizer(input_size=self.mm_hidden_size, 
@@ -319,15 +205,12 @@ class PrismaticVLM(VLM):
                                         base_ckpt_path="/media/liuzhuoyang/new_vla/Any2Point/Any2Point_CLIP_Lang/ckpts/ViT-L-14.pt")
         self.projector_3d = MLPProjector(self.vision_tower_3d.embed_dim, token_size)
 
-        self.proprio_embedder = ActionEmbedder(action_size=in_channels, hidden_size=token_size)
+        self.proprio_embedder = ActionEmbedder(action_size=action_dim, hidden_size=token_size)
         if self.use_diff:
-            self.x_embedder = ActionEmbedder(action_size=in_channels, hidden_size=token_size)
+            self.x_embedder = ActionEmbedder(action_size=action_dim, hidden_size=token_size)
             self.t_embedder = TimestepEmbedder(token_size)
             self.z_embedder = LabelEmbedder(in_size=token_size, hidden_size=token_size, dropout_prob=self.class_dropout_prob)
-            self.final_layer = FinalLayer(token_size, in_channels)
-            # self.final_layers = nn.ModuleList([
-            #     FinalLayer(token_size, in_channels) for _ in range(4)  # 为4个层创建4个FinalLayer
-            # ])
+            self.final_layer = FinalLayer(token_size, action_dim)
 
         # Set Module Keys =>> used in Checkpoint Saving / Model Loading
         self.all_module_keys = ["vision_tower_2d", "vision_tower_3d","projector_2d", "projector_3d",
@@ -338,12 +221,6 @@ class PrismaticVLM(VLM):
 
         self.initialize_weights()
         self.vision_tower_3d.initialize_weights()
-    
-    def get_vision_tower_3d(self):
-        vision_tower_3d = getattr(self, 'vision_tower_3d', None)
-        if type(vision_tower_3d) is list:
-            vision_tower_3d = vision_tower_3d[0]
-        return vision_tower_3d
     
     def get_vision_tower_2d(self):
         vision_tower_2d = getattr(self, 'vision_tower_2d', None)
@@ -662,7 +539,7 @@ class PrismaticVLM(VLM):
         """Return an FSDP _or_policy over the policies returned by each individual backbone (and our VLM policy)."""
         vision_fsdp_wrapping_policy = partial(
             _module_wrap_policy,
-            module_classes={PointViT, VisionTokenizer, MultiModalAligner},
+            module_classes={PointViT, VisionTokenizer},
         )
         llm_fsdp_wrapping_policy = self.llm_backbone.get_fsdp_wrapping_policy()
 
@@ -683,40 +560,6 @@ class PrismaticVLM(VLM):
                 prismatic_fsdp_wrapping_policy,
             ],
         )
-
-
-    def get_image_embedding(
-        self, images
-    ):
-        vision_tower_2d = self.get_vision_tower_2d()
-        if vision_tower_2d is None or images is None:
-            return None, None
-
-        if type(images) is list or images.ndim == 5:
-            concat_images = torch.cat([image for image in images], dim=0)
-            image_features = self.encode_images(concat_images)
-            split_sizes = [image.shape[0] for image in images]
-            image_features = torch.split(image_features, split_sizes, dim=0)
-            image_features = [x.flatten(0, 1) for x in image_features]
-        else:
-            projected_patch_embeddings, patch_hw = self.encode_images(images)
-
-        projected_patch_embeddings = torch.stack(projected_patch_embeddings, dim=0)
-
-        return  projected_patch_embeddings, patch_hw
-    
-    def get_pointcloud_embedding(
-        self, pointcloud
-    ):
-        vision_tower_3d = self.vision_tower_3d
-        if vision_tower_3d is None or pointcloud is None:
-            raise ValueError
-
-        _, _, pointcloud_patch_embeddings = vision_tower_3d(pointcloud)
-
-        projected_patch_embeddings = self.projector_3d(pointcloud_patch_embeddings)  
-
-        return projected_patch_embeddings
     
     def get_fused_tokens(
         self, images, pointcloud
@@ -754,6 +597,7 @@ class PrismaticVLM(VLM):
             vision_strides={'patch_stride': 14, 'conv_stride': 3}
         )
         
+        ## project visualization
         # save_projection_visualization(
         #     pointcloud_centers, 
         #     patch_indices, 
@@ -797,7 +641,6 @@ class PrismaticVLM(VLM):
         **kwargs,
     ): 
         """Run a forward pass through the VLM, returning a CausalLMOutputWithPast instance (contains loss)."""
-        # Handle Inference (leverage cache, short-circuit on just LLM forward)
         if use_diff is not None:
             self.use_diff = use_diff
         if proprio is not None:
@@ -855,12 +698,12 @@ class PrismaticVLM(VLM):
             )
             return output, None
         
-        _input_ids = input_ids
+        # _input_ids = input_ids
         
         # get image and point_cloud embeddings
         point_cloud = point_cloud.to(self.device) 
-        projected_fused_embeddings, patch_indices, valid_mask= self.get_fused_tokens(images, point_cloud) # 注意返回了token的数量
-        # projected_fused_embeddings= self.get_fused_tokens(images, point_cloud) # 注意返回了token的数量
+        projected_fused_embeddings, patch_indices, valid_mask= self.get_fused_tokens(images, point_cloud) 
+        # projected_fused_embeddings= self.get_fused_tokens(images, point_cloud) # 注意返回的token的数量
         input_embeddings = self.llm_backbone.embed_input_ids(input_ids)
         z = torch.cat([input_embeddings[:, :1, :], 
                        projected_fused_embeddings, 
@@ -895,7 +738,7 @@ class PrismaticVLM(VLM):
         if labels is not None: 
             projected_patch_labels_fused = torch.full(
                 (projected_fused_embeddings.shape[0], projected_fused_embeddings.shape[1]),
-                IGNORE_INDEX,
+                -100,
                 dtype=labels.dtype,
                 device=labels.device,
             )
@@ -904,16 +747,6 @@ class PrismaticVLM(VLM):
             if self.use_diff:
                 last_true_indice = torch.where(input_ids[indice] == tag_0)[tag_1][-1].item() + projected_fused_embeddings.shape[1]
                 last_true_indices.append(last_true_indice)
-                # print("z[indice, :last_true_indice, :].shape[0]",z[indice, :last_true_indice, :].shape[0])
-                # input()
-                # print("proprio[indice].shape[0]",proprio[indice].shape[0])
-                # input()
-                # print("t[indice].shape[0]",t[indice].shape[0])
-                # input()
-                # print("x[indice].shape[0]",x[indice].shape[0])
-                # input()
-                # print("z[indice, last_true_indice:, :].shape[0]",z[indice, last_true_indice:, :].shape[0])
-                # input()
                 embed = torch.cat([
                     z[indice, :last_true_indice, :],
                     proprio[indice],
@@ -973,51 +806,9 @@ class PrismaticVLM(VLM):
         multimodal_attention_mask = torch.cat(multimodal_attention_mask, dim=0) if len(multimodal_attention_mask) !=0 else None
         multimodal_labels = torch.cat(multimodal_labels, dim=0) if len(multimodal_labels) !=0 else None
 
-        # === Add Unimodal Handling ===
-        # Create Fused Embeddings, Attention Mask, and Labels by Merging with "unimodal" Inputs (if applicable)
-        unimodal_indices = torch.tensor(
-            [idx for idx in range(len(input_ids)) if idx not in multimodal_indices],
-            dtype=torch.long,
-            device=multimodal_indices.device,
-        )
-
-        # No "unimodal" data --> Fused == Multimodal
-        if len(unimodal_indices) == 0:
-            fused_embeddings = multimodal_embeddings
-            fused_attention_mask = multimodal_attention_mask
-            fused_labels = multimodal_labels
-
-        else:
-            input("pause")
-            # Otherwise --> Merge w/ unimodal data
-            # This doesn't matter --> but in the "normal" case this is the embedding of the <PAD> token
-            #   => NOTE :: Verified that `zeros/randn/empty/<PAD> embedding` all return the same result!
-            unimodal_embeddings_pad = torch.zeros(
-                (len(unimodal_indices), projected_fused_embeddings.shape[1], input_embeddings.shape[2]),
-                dtype=input_embeddings.dtype,
-                device=input_embeddings.device,
-            )
-            unimodal_attention_pad = torch.full(
-                (len(unimodal_indices), projected_fused_embeddings.shape[1]),
-                False,
-                dtype=attention_mask.dtype,
-                device=attention_mask.device,
-            )
-            unimodal_labels_pad = torch.full(
-                (len(unimodal_indices), projected_fused_embeddings.shape[1]),
-                IGNORE_INDEX,
-                dtype=labels.dtype,
-                device=labels.device,
-            )
-
-            unimodal_embeddings = torch.cat([input_embeddings[unimodal_indices], unimodal_embeddings_pad], dim=1)
-            unimodal_attention_mask = torch.cat([attention_mask[unimodal_indices], unimodal_attention_pad], dim=1)
-            unimodal_labels = torch.cat([labels[unimodal_indices], unimodal_labels_pad], dim=1)
-
-            # Create "Fused" Tensors by Stacking Multimodal & Unimodal
-            fused_embeddings = torch.vstack([multimodal_embeddings, unimodal_embeddings])
-            fused_attention_mask = torch.vstack([multimodal_attention_mask, unimodal_attention_mask])
-            fused_labels = torch.vstack([multimodal_labels, unimodal_labels])
+        fused_embeddings = multimodal_embeddings
+        fused_attention_mask = multimodal_attention_mask
+        fused_labels = multimodal_labels
         
         # Run LLM Forward --> returns CausalLMOutputWithPast!
         output: CausalLMOutputWithPast = self.llm_backbone(
@@ -1043,14 +834,14 @@ class PrismaticVLM(VLM):
             last_hidden = self.final_layer(last_hidden)
             
             # Compute action output
-            action_out = []
+            noise_pred = []
             for i, indices in enumerate(last_true_indices):
-                action_start = int(indices) + 2
-                action_end = int(indices) + self.future_action_window_size + 3
-                action_out.append(last_hidden[i, action_start:action_end, :].unsqueeze(0))
+                noise_start = int(indices) + 2
+                noise_end = int(indices) + self.future_action_window_size + 3
+                noise_pred.append(last_hidden[i, noise_start:noise_end, :].unsqueeze(0))
             
-            action_out = torch.cat(action_out, dim=0)
-            return output, action_out
+            noise_pred = torch.cat(noise_pred, dim=0)
+            return output, noise_pred
         
         return output # autoregressive
         

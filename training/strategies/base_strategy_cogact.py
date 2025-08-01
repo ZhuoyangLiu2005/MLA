@@ -285,7 +285,6 @@ class TrainingStrategy(ABC):
             disable=not overwatch.is_rank_zero(),
         ) as progress:
             self.vlm.train()
-
             # Zero Gradients (just in case)
             if self.vlm.use_ema is not None and self.vlm.use_ema == True:
                 self.vlm.ema_diffusion.eval()
@@ -317,7 +316,7 @@ class TrainingStrategy(ABC):
                         )
                         ar = torch.tensor(0, dtype=torch.float32) 
                         metrics.commit(ar_loss=ar,diff_loss=loss) 
-                        loss += output.contrastive_loss # add the contrastive loss to the total loss    
+                        loss += output.contrastive_loss # add the contrastive loss to the total loss
                     else: 
                         output = self.vlm(
                             input_ids=batch["input_ids"],

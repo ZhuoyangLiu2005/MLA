@@ -30,13 +30,9 @@ from vlm.prismatic.overwatch import initialize_overwatch
 from vlm.prismatic.util.nn_utils import FusedMLPProjector, LinearProjector, MLPProjector
 from action_model import create_diffusion
 
-# 新加入的2D视觉处理模块
 from vlm.prismatic.models.eve_tokenizer.vision_tokenizer import VisionTokenizer
 from vlm.prismatic.models.eve_tokenizer.vision_tokenizer import MLP_GELU
-
-# 新加入的3D视觉处理模块
 from vlm.prismatic.a2pmodels.backbone.pointvit import PointViT
-from vlm.prismatic.vla.datasets.datasets import farthest_point_sample
 
 from action_model.action_model import ActionModel
 from action_model.models import DiT
@@ -57,7 +53,6 @@ class CogACT(nn.Module):
         self,
         vlm: PrismaticVLM,
         action_tokenizer: ActionTokenizer,
-        action_model_type: str = 'DiT-B',
         token_size: int = 4096,
         action_dim: int = 7,
         future_action_window_size: int = 15,
@@ -137,7 +132,7 @@ class CogACT(nn.Module):
             proprio = proprio.repeat(repeated_diffusion_steps, *([1] * (proprio.ndimension() - 1)))
             
             actions = actions.repeat(repeated_diffusion_steps, *([1] * (actions.ndimension() - 1)))
-            actions_history = actions[:,0:self.past_action_window_size,:]
+            actions_history = actions[:,0: self.past_action_window_size,:]
             actions_future = actions[:, -(self.future_action_window_size+1):, :]
 
             input_ids = input_ids.repeat(repeated_diffusion_steps, *([1] * (input_ids.ndimension() - 1)))
@@ -610,7 +605,7 @@ class CogACT(nn.Module):
         unnorm_key: Optional[str] = None, 
         cfg_scale: float = 0.0, 
         use_ddim: bool = True,
-        num_ddim_steps: int = 10,
+        num_ddim_steps: int = 8,
         action_dim: int = 7,
         **kwargs: str
     ) -> np.ndarray:

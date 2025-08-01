@@ -88,7 +88,7 @@ class RLDSBatchTransform:
         image = torch.cat([image, image_mask], dim=0)
         
         # pointcloud
-        front_pc = rlds_batch["observation"]["pointcloud"][0] # (1024, 3)
+        front_pc = rlds_batch["observation"]["pointcloud"][0] # (n_points, 3)
         front_pc = torch.tensor(front_pc).to(torch.float)
 
         lang = rlds_batch["task"]["language_instruction"].decode().lower()
@@ -139,7 +139,6 @@ class RLDSBatchTransform:
         else:
             # [CRITICAL] We do not want to take the loss for anything but the predicted action tokens!
             labels[: -(len(action[0]) + 1)] = IGNORE_INDEX
-
         if not self.predict_stop_token:
             labels[-1] = IGNORE_INDEX
         

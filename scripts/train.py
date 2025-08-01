@@ -55,7 +55,6 @@ overwatch = initialize_overwatch(__name__)
 
 @dataclass
 class TrainConfig:
-    # fmt: off
 
     # VLAConfig (`conf/vla.py`); override with --vla.type `VLARegistry.<VLA>.vla_id`
     vla: VLAConfig = field(
@@ -94,7 +93,6 @@ class TrainConfig:
     load_all_data_for_training: bool = True                         # Load all training data 
     future_action_window_size: int = 15                             # Action chunking, predicting future actions + current action
     past_action_window_size: int = 0                                # Action history window size, not used now, set to be 0 
-    action_model_type: str = 'DiT-B'                                # Action model type, chose from ['DiT-S', 'DiT-B', 'DiT-L']
     use_ema: bool = False                                           # EMA version of action model
     action_dim: int = 7                                             # Dimension of action space
     class_dropout_prob: float = 0.
@@ -125,8 +123,6 @@ class TrainConfig:
         assert (
             self.vla.expected_world_size == overwatch.world_size()
         ), f"Expected World Size = {self.vla.expected_world_size} but Found {overwatch.world_size()} GPUs!"
-
-    # fmt: on
 
 
 def smart_tokenizer_and_embedding_resize(
@@ -205,7 +201,6 @@ def train(cfg: TrainConfig) -> None:
         vla = load_vla(cfg.pretrained_checkpoint, 
                         hf_token=hf_token, 
                         load_for_training=True, 
-                        action_model_type=cfg.action_model_type, 
                         action_dim=cfg.action_dim,
                         future_action_window_size=cfg.future_action_window_size,
                         past_action_window_size=cfg.past_action_window_size,
@@ -227,7 +222,6 @@ def train(cfg: TrainConfig) -> None:
         action_tokenizer = ActionTokenizer(vlm.llm_backbone.get_tokenizer())
         vla = CogACT(vlm, 
                     action_tokenizer,
-                    action_model_type=cfg.action_model_type,
                     action_dim=cfg.action_dim,
                     future_action_window_size=cfg.future_action_window_size,
                     past_action_window_size=cfg.past_action_window_size,
@@ -237,7 +231,6 @@ def train(cfg: TrainConfig) -> None:
                     llm_action_layers=cfg.llm_action_layers,
                     llm_action_layers_stride=cfg.llm_action_layers_stride
                 )
-        # del this variable to avoid bugs. The vlm shouldn't be used anymore
         del vlm
 
     else:
@@ -254,7 +247,6 @@ def train(cfg: TrainConfig) -> None:
         action_tokenizer = ActionTokenizer(vlm.llm_backbone.get_tokenizer())
         vla = CogACT(vlm, 
                     action_tokenizer,
-                    action_model_type=cfg.action_model_type,
                     action_dim=cfg.action_dim,
                     future_action_window_size=cfg.future_action_window_size,
                     past_action_window_size=cfg.past_action_window_size,
@@ -264,7 +256,6 @@ def train(cfg: TrainConfig) -> None:
                     llm_action_layers=cfg.llm_action_layers,
                     llm_action_layers_stride=cfg.llm_action_layers_stride
                 )
-        # del this variable to avoid bugs. The vlm shouldn't be used anymore
         del vlm
 
     smart_tokenizer_and_embedding_resize(tokenizer = vla.llm_backbone.get_tokenizer(), model = vla.llm_backbone.llm)
@@ -295,9 +286,9 @@ def train(cfg: TrainConfig) -> None:
     overwatch.info(f"Invoking `VLM.freeze_backbones()` for `{vla_id}` => Stage: `{stage}`")
     vla.freeze_backbones(stage)
 
-    # if cfg.vla.freeze_vision_tower and cfg.vla.freeze_llm_backbone:
-    #     for name, param in vla.vlm.named_parameters():
-    #         param.requires_grad = False
+    if cfg.vla.freeze_vision_tower and cfg.vla.freeze_llm_backbone:
+        for name, param in vla.vlm.named_parameters():
+            param.requires_grad = False
     
     # for name, param in vla.vlm.named_parameters():
     #     print(f"{name}: {param.requires_grad}")
@@ -317,7 +308,7 @@ def train(cfg: TrainConfig) -> None:
         image_transform=vla.vlm.get_vision_tower_2d().image_processor,
         tokenizer=vla.llm_backbone.get_tokenizer(),
         prompt_builder_fn=vla.llm_backbone.prompt_builder_fn,
-        default_image_resolution=(3,224,224),
+        default_image_resolution=(3, 224, 224),
         shuffle_buffer_size=cfg.vla.shuffle_buffer_size,
         image_aug=cfg.image_aug,
         load_all_data_for_training=cfg.load_all_data_for_training,

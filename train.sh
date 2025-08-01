@@ -28,7 +28,7 @@ PRETRAIN=2D_0623_E2
 LLM_VISION_LAYERS=8
 LLM_ACTION_LAYERS=8
 
-SETTING=Pretrain${PRETRAIN}_FreezeVis${FREEZE_VISON}_Window${FUTURE_ACTION_STEPS}_Diff${USE_DIFF}4head_selectionft_contrastive_Vislayer${LLM_VISION_LAYERS}_1024_0403_0712
+SETTING=Pretrain${PRETRAIN}_FreezeVis${FREEZE_VISON}_Window${FUTURE_ACTION_STEPS}_Diff${USE_DIFF}_Contrastive_Vislayer${LLM_VISION_LAYERS}_1024_0403_0801
 
 TASK=4tasks_selected_keyframe_pointcloud_1024_0403
 NUM_GPUS=8
@@ -65,7 +65,6 @@ torchrun --standalone --nnodes ${NODES} --nproc-per-node ${NUM_GPUS} scripts/tra
   --class_dropout_prob ${CLASS_DROPOUT_PROB} \
   --use_diff ${USE_DIFF} \
   --ar_diff_loss ${AR_DIFF_LOSS} \
-  --action_model_type DiT-B \
   --is_resume False \
   --pretrained_checkpoint "/media/liuzhuoyang/new_vla/2D_VLA_beta/pretrain-exp/exp_rtx_dataset_4_freeze_vit_window0_baidu_2d_pretrain_0623/checkpoints/step-067024-epoch-02-loss=8.4536.pt"
   # --pretrained_checkpoint "/media/huggingface/hub/models--openvla--openvla-7b/snapshots/31f090d05236101ebfc381b61c674dd4746d4ce0"
