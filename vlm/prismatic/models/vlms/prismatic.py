@@ -34,7 +34,7 @@ from prismatic.models.eve_tokenizer.vision_tokenizer import VisionTokenizer
 from prismatic.models.eve_tokenizer.vision_tokenizer import MLP_GELU
 from prismatic.models.fuser.fuser import MultiModalAligner, PerceiverAligner
 from prismatic.models.fuser.contrastive import project_3d_to_2d, project_3d_to_2d_672_pyrep_compatible
-from prismatic.models.fuser.selection import SelectionHead
+# from prismatic.models.fuser.selection import SelectionHead
 from prismatic.models.constants import (DEFAULT_IM_END_TOKEN, DEFAULT_IM_START_TOKEN,
                                DEFAULT_IMAGE_PATCH_TOKEN, IGNORE_INDEX,
                                IMAGE_TOKEN_INDEX)
@@ -324,19 +324,16 @@ class PrismaticVLM(VLM):
             self.x_embedder = ActionEmbedder(action_size=in_channels, hidden_size=token_size)
             self.t_embedder = TimestepEmbedder(token_size)
             self.z_embedder = LabelEmbedder(in_size=token_size, hidden_size=token_size, dropout_prob=self.class_dropout_prob)
-            # self.final_layer = FinalLayer(token_size, in_channels)
-            self.final_layers = nn.ModuleList([
-                FinalLayer(token_size, in_channels) for _ in range(4)  # 为4个层创建4个FinalLayer
-            ])
-            selection_head_input_dim = token_size * 4
-            num_heads_to_select = 4
-            self.selection_head = FinalLayer(selection_head_input_dim, num_heads_to_select)
+            self.final_layer = FinalLayer(token_size, in_channels)
+            # self.final_layers = nn.ModuleList([
+            #     FinalLayer(token_size, in_channels) for _ in range(4)  # 为4个层创建4个FinalLayer
+            # ])
 
         # Set Module Keys =>> used in Checkpoint Saving / Model Loading
         self.all_module_keys = ["vision_tower_2d", "vision_tower_3d","projector_2d", "projector_3d",
                                 "llm_backbone", "proprio_embedder"]
         if self.use_diff:
-            self.all_module_keys.extend(["x_embedder", "t_embedder", "final_layers", "selection_head"])
+            self.all_module_keys.extend(["x_embedder", "t_embedder", "final_layer",])
         self.trainable_module_keys = []
 
         self.initialize_weights()
@@ -382,9 +379,9 @@ class PrismaticVLM(VLM):
             nn.init.normal_(self.t_embedder.mlp[0].weight, std=0.02)
             nn.init.normal_(self.t_embedder.mlp[2].weight, std=0.02)
 
-            for final_layer in self.final_layers:
-                nn.init.constant_(final_layer.mlp.fc2.weight, 0)
-                nn.init.constant_(final_layer.mlp.fc2.bias, 0)
+            # for final_layer in self.final_layers:
+            nn.init.constant_(self.final_layer.mlp.fc2.weight, 0)
+            nn.init.constant_(self.final_layer.mlp.fc2.bias, 0)
             
     def load_encoder_to_vision_tower(self, ckpt_path, vision_tower_3d):
         """
@@ -518,13 +515,12 @@ class PrismaticVLM(VLM):
             self.llm_backbone.requires_grad_(True)
             self.projector_2d.requires_grad_(True)
             self.projector_3d.requires_grad_(True)
-            self.selection_head.requires_grad_(True)
 
             # Add to `self.trainable_module_keys`
             self.trainable_module_keys = ["llm_backbone","projector_2d","projector_3d",
                                           "proprio_embedder"]
             if self.use_diff:
-                self.trainable_module_keys.extend(["x_embedder", "t_embedder","final_layers","selection_head"])
+                self.trainable_module_keys.extend(["x_embedder", "t_embedder","final_layer"])
 
             # Update Trackers
             self.vision_backbone_requires_grad = False
@@ -535,7 +531,6 @@ class PrismaticVLM(VLM):
             overwatch.info(f"[TRAINABLE] 🔥 =>> LLM Backbone `{self.llm_backbone.identifier}`", ctx_level=1)
             overwatch.info(f"[TRAINABLE] 🔥 =>> Projector 2D ", ctx_level=1)
             overwatch.info(f"[TRAINABLE] 🔥 =>> Projector 3D ", ctx_level=1)
-            overwatch.info(f"[TRAINABLE] 🔥 =>> Selection Head ", ctx_level=1)
 
         elif stage in {"full-finetune", "vla-full-train"}:
             self.vision_tower_2d.requires_grad_(True)
@@ -543,14 +538,13 @@ class PrismaticVLM(VLM):
             self.llm_backbone.requires_grad_(True)
             self.projector_2d.requires_grad_(True)
             self.projector_3d.requires_grad_(True)
-            self.selection_head.requires_grad_(True)
 
             # Add to `self.trainable_module_keys`
             self.trainable_module_keys = ["vision_tower_2d", "vision_tower_3d", 
                                           "projector_2d", "projector_3d",
                                           "llm_backbone", "proprio_embedder"]
             if self.use_diff:
-                self.trainable_module_keys.extend(["x_embedder", "t_embedder", "final_layers","selection_head"])
+                self.trainable_module_keys.extend(["x_embedder", "t_embedder", "final_layer"])
 
             # Update Trackers
             self.vision_backbone_requires_grad = True
@@ -561,39 +555,6 @@ class PrismaticVLM(VLM):
             overwatch.info(f"[TRAINABLE] 🔥 =>> LLM Backbone `{self.llm_backbone.identifier}`", ctx_level=1)
             overwatch.info(f"[TRAINABLE] 🔥 =>> Projector 2D ", ctx_level=1)
             overwatch.info(f"[TRAINABLE] 🔥 =>> Projector 3D ", ctx_level=1)
-            overwatch.info(f"[TRAINABLE] 🔥 =>> Selection Head ", ctx_level=1)
-        
-        elif stage in {"selection-head-finetune"}:
-            self.vision_tower_2d.requires_grad_(False)
-            self.vision_tower_3d.requires_grad_(False)
-            self.llm_backbone.requires_grad_(False)
-            self.projector_2d.requires_grad_(False)
-            self.projector_3d.requires_grad_(False)
-            if self.use_diff:
-                self.selection_head.requires_grad_(True)
-                self.proprio_embedder.requires_grad_(False)
-                self.x_embedder.requires_grad_(False)
-                self.t_embedder.requires_grad_(False)
-                self.final_layers.requires_grad_(False)
-            else:
-                raise ValueError
-
-            # Add to `self.trainable_module_keys`
-            if self.use_diff:
-                self.trainable_module_keys = ["selection_head"]
-
-            # Update Trackers
-            self.vision_backbone_requires_grad = False
-
-            # Explicitly Log Frozen / Unfrozen Components
-            # fmt: off
-            overwatch.info(f"[Frozen]    🥶   =>> Vision Tower 2D ", ctx_level=1)  # noqa: E501
-            overwatch.info(f"[Frozen]    🥶   =>> Vision Tower 3D ", ctx_level=1)  # noqa: E501
-            overwatch.info(f"[Frozen]    🥶   =>> LLM Backbone `{self.llm_backbone.identifier}`", ctx_level=1)  # noqa: E501
-            overwatch.info(f"[Frozen]    🥶   =>> Projector 2D ", ctx_level=1)
-            overwatch.info(f"[Frozen]    🥶   =>> Projector 3D ", ctx_level=1)
-            overwatch.info(f"[TRAINABLE] 🔥 =>> Selection Head ", ctx_level=1)
-            # fmt: on
 
         elif stage in {"last-layer-finetune", "vla-last-layer-train"}:
             self.vision_tower_2d.requires_grad_(False)
@@ -609,7 +570,7 @@ class PrismaticVLM(VLM):
             # Add to `self.trainable_module_keys`
             self.trainable_module_keys = ["llm_backbone", "proprio_embedder"]
             if self.use_diff:
-                self.trainable_module_keys.extend(["x_embedder", "t_embedder", "final_layers"])
+                self.trainable_module_keys.extend(["x_embedder", "t_embedder", "final_layer"])
 
             # Update Trackers
             self.vision_backbone_requires_grad = False
@@ -635,7 +596,7 @@ class PrismaticVLM(VLM):
             # Add to `self.trainable_module_keys`
             self.trainable_module_keys = ["vision_tower_2d", "vision_tower_3d", "llm_backbone", "proprio_embedder"]
             if self.use_diff:
-                self.trainable_module_keys.extend(["x_embedder", "t_embedder", "final_layers"])
+                self.trainable_module_keys.extend(["x_embedder", "t_embedder", "final_layer"])
 
             # Update Trackers
             self.vision_backbone_requires_grad = True
@@ -1077,80 +1038,19 @@ class PrismaticVLM(VLM):
             compute_token_contrastive_loss=True, 
         )
         
-        # if self.use_diff:
-        #     last_hidden = output.hidden_states[-1]
-        #     last_hidden = self.final_layer(last_hidden)
-            
-        #     # Compute action output
-        #     action_out = []
-        #     for i, indices in enumerate(last_true_indices):
-        #         action_start = int(indices) + 2
-        #         action_end = int(indices) + self.future_action_window_size + 3
-        #         action_out.append(last_hidden[i, action_start:action_end, :].unsqueeze(0))
-            
-        #     action_out = torch.cat(action_out, dim=0)
-        #     return output, action_out
-    
         if self.use_diff:
-            selected_hidden_states = [
-                output.hidden_states[-7],  # layer 26, [B, n_tokens, 4096]
-                output.hidden_states[-5],  # layer 28
-                output.hidden_states[-3],  # layer 30
-                output.hidden_states[-1]   # layer 32
-            ]
-            action_out_total = []
-            # --- 【新增】用于收集selection_head输入特征的列表 ---
-            selection_features_per_layer = []
-            for i, hidden in enumerate(selected_hidden_states):
-                last_hidden = self.final_layers[i](hidden)  # 使用对应的final_layer, [B, n_tokens, 7]
-                
-                # Compute action output for this layer
-                layer_action_out = []
-                layer_selection_features = [] # 存储当前层每个样本的特征
-                
-                for j, indices in enumerate(last_true_indices):
-                    action_start = int(indices) + 2
-                    action_end = int(indices) + self.future_action_window_size + 3
-                    noise_pred_window = last_hidden[j, action_start:action_end, :] # [n_noise, 7]
-                    layer_action_out.append(noise_pred_window.unsqueeze(0)) 
-                    
-                    noise_select_window = hidden[j, action_start:action_end, :] # [1, 4096]y
-                    selection_feature = torch.mean(noise_select_window, dim=0) # [4096]y
-                    layer_selection_features.append(selection_feature.unsqueeze(0)) # [B, 4096]
-                
-                action_out_total.append(torch.cat(layer_action_out, dim=0)) # [B, n_noise, 7]
-                selection_features_per_layer.append(torch.cat(layer_selection_features, dim=0)) # [4, B, 4096]
+            last_hidden = output.hidden_states[-1]
+            last_hidden = self.final_layer(last_hidden)
             
-            # Stack all layer predictions
-            action_out = torch.stack(action_out_total, dim=0)  # shape: [4, batch_size, n_noise, 7]
+            # Compute action output
+            action_out = []
+            for i, indices in enumerate(last_true_indices):
+                action_start = int(indices) + 2
+                action_end = int(indices) + self.future_action_window_size + 3
+                action_out.append(last_hidden[i, action_start:action_end, :].unsqueeze(0))
             
-            # # tmp
-            # action_out = torch.mean(torch.stack(action_out_total, dim=0), dim=0)
-            # return output, action_out
-
-            # selection_features_per_layer 是一个包含4个 [B, D] 张量的列表
-            # 我们将这4个张量在特征维度上拼接
-            stacked_features = torch.stack(selection_features_per_layer, dim=0) # [4, B, 4096]
-            transposed_features = stacked_features.transpose(0, 1) # [B, 4, 4096]
-            fused_selection_features = transposed_features.reshape(transposed_features.size(0), -1) # [B, 4*4096]
-            
-            # print(fused_selection_features.shape)
-            # input()
-            # 通过Norm和Head得到最终的分类logits
-            selection_logits = self.selection_head(fused_selection_features) # [B, 4]
-            
-            if self.training:
-                return output, action_out, selection_logits
-            else:
-                best_head_indices = torch.argmax(selection_logits, dim=1)
-                batch_size = action_out.shape[1]
-                batch_indices = torch.arange(batch_size, device=action_out.device)
-                final_action_out = action_out[int(best_head_indices)]
-                # print(action_out.shape)
-                print("best_head_indice: ",best_head_indices)
-                # print(final_action_out.shape)
-                # input()
-                return output, final_action_out
+            action_out = torch.cat(action_out, dim=0)
+            return output, action_out
         
         return output # autoregressive
         

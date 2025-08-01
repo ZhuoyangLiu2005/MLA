@@ -1,7 +1,5 @@
 # 每次开始训练记得检查视角！！！
 
-# ENVIRONMENT=/media/miniconda3/envs/efvla
-# conda activate $ENVIRONMENT
 cd /media/liuzhuoyang/new_vla/Diff_VLA_beta/CogACT
 export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 export HF_HOME=/media/huggingface
@@ -15,7 +13,7 @@ export TRANSFORMERS_OFFLINE=1
 export TIMM_OFFLINE=1
 
 # for debug
-# export WANDB_MODE=offline
+export WANDB_MODE=offline
 
 # training settings
 FUTURE_ACTION_STEPS=0
@@ -23,7 +21,6 @@ FREEZE_VISON=true
 FREEZE_LLM=false
 ACTION_TOKENIZER_EXIST=false
 USE_DIFF=true
-SELECTION_FINETUNE=true
 AR_DIFF_LOSS=false
 REPEATED_DIFFUSION_STEPS=4
 CLASS_DROPOUT_PROB=0.0
@@ -67,7 +64,6 @@ torchrun --standalone --nnodes ${NODES} --nproc-per-node ${NUM_GPUS} scripts/tra
   --future_action_window_size ${FUTURE_ACTION_STEPS} \
   --class_dropout_prob ${CLASS_DROPOUT_PROB} \
   --use_diff ${USE_DIFF} \
-  --selection_head_ft ${SELECTION_FINETUNE} \
   --ar_diff_loss ${AR_DIFF_LOSS} \
   --action_model_type DiT-B \
   --is_resume False \

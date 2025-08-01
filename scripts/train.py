@@ -100,7 +100,6 @@ class TrainConfig:
     class_dropout_prob: float = 0.
     action_tokenizer_exist: bool = False
     use_diff: bool = False
-    selection_head_ft: bool = False
     ar_diff_loss: bool = False
     
     llm_vision_layers: int = 8
@@ -279,8 +278,6 @@ def train(cfg: TrainConfig) -> None:
         stage = "full-finetune"  # Full fine-tuning
     elif cfg.vla.freeze_vision_tower and not cfg.vla.freeze_llm_backbone:
         stage = "finetune"  # Frozen vision encoder
-    elif cfg.selection_head_ft:
-        stage = "selection-head-finetune" # Selection head fine-tuning
     elif cfg.vla.freeze_vision_tower and cfg.vla.freeze_llm_backbone:
         stage = "align"  # Fine-tuning projector
     elif not cfg.vla.freeze_vision_tower and cfg.vla.freeze_llm_backbone and cfg.vla.unfreeze_last_llm_layer:

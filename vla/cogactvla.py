@@ -152,7 +152,7 @@ class CogACT(nn.Module):
             timestep = torch.randint(0, self.diffusion.num_timesteps, (actions_future.size(0),), device= actions.device)
             x = self.diffusion.q_sample(actions_future, timestep, noise)
 
-            output, noise_preds, selection_logits = self.vlm(
+            output, noise_pred, = self.vlm(
                 input_ids=input_ids,
                 attention_mask=attention_mask,
                 images=images,
@@ -169,27 +169,9 @@ class CogACT(nn.Module):
                 return_dict=return_dict,
                 use_diff = self.use_diff,
             )
-            # assert noise_pred.shape == noise.shape == actions.shape
-            # loss = ((noise_pred - noise) ** 2).mean()
-            assert noise_preds[0].shape == noise.shape == actions.shape
-            all_head_losses = []
-            for i in range(noise_preds.shape[0]): # 循环4个头
-                # 计算当前头预测的噪声和真实噪声之间的L2损失
-                # 注意：我们需要保留batch维度，以便为每个样本找到最佳的头
-                # .mean(dim=[1, 2, ...]) 会计算每个样本的平均loss
-                per_sample_loss = torch.mean((noise_preds[i] - noise) ** 2, dim=list(range(1, noise.ndim)))
-                all_head_losses.append(per_sample_loss)
-            stacked_losses = torch.stack(all_head_losses, dim=1)
-            main_diffusion_loss = stacked_losses.sum()
-            # print(stage)
-            # input()
-            selection_gt_labels = torch.argmin(stacked_losses, dim=1)
-            selection_loss_fct = nn.CrossEntropyLoss()
-            selection_loss = selection_loss_fct(selection_logits, selection_gt_labels)
-            if stage == "selection-head-finetune" :
-                return selection_loss, output
-            elif stage == "finetune":
-                return main_diffusion_loss+selection_loss, output
+            assert noise_pred.shape == noise.shape == actions.shape
+            loss = ((noise_pred - noise) ** 2).mean()
+            return loss, output
         else:
             output = self.vlm(
                 input_ids=input_ids,
@@ -323,19 +305,13 @@ class CogACT(nn.Module):
         else:
             print("\n\nNo proprio_embedder found in checkpoint, initializing a new one!!\n")
             
-        if use_diff and "x_embedder" in model_state_dict.keys() and "t_embedder" in model_state_dict.keys() and "final_layers" in model_state_dict.keys() and use_diff:
+        if use_diff and "x_embedder" in model_state_dict.keys() and "t_embedder" in model_state_dict.keys() and "final_layer" in model_state_dict.keys() and use_diff:
             vlm.x_embedder.load_state_dict(model_state_dict["x_embedder"])
             vlm.t_embedder.load_state_dict(model_state_dict["t_embedder"])
-            vlm.final_layers.load_state_dict(model_state_dict["final_layers"])
-            print("\n\nSuccessfully loaded x_embedder, proprio_embedder, t_embedder, final_layers from checkpoint!!!!\n")
+            vlm.final_layer.load_state_dict(model_state_dict["final_layer"])
+            print("\n\nSuccessfully loaded x_embedder, proprio_embedder, t_embedder, final_layer from checkpoint!!!!\n")
         else:
-            print("\n\nNo x_embedder, t_embedder, final_layers found in checkpoint!!!!\n")
-            
-        if use_diff and "selection_head" in model_state_dict.keys():
-            vlm.selection_head.load_state_dict(model_state_dict["selection_head"])
-            print("\n\nSuccessfully loaded selection_head from checkpoint!!!!\n")
-        else:
-            print("\n\nNo selection_head found in checkpoint!!!!\n")
+            print("\n\nNo x_embedder, t_embedder, final_layer found in checkpoint!!!!\n")
 
         # Freeze Weights
         if freeze_weights:

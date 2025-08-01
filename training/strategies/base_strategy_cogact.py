@@ -315,13 +315,9 @@ class TrainingStrategy(ABC):
                             use_diff=True,
                             stage=self.stage,
                         )
-                        if self.stage == "selection-head-finetune":
-                            diff = torch.tensor(0, dtype=torch.float32)
-                            metrics.commit(ar_loss=diff,diff_loss=diff) # record the ar and diff loss
-                        else:
-                            ar = torch.tensor(0, dtype=torch.float32) 
-                            metrics.commit(ar_loss=ar,diff_loss=loss) 
-                            loss += output.contrastive_loss*0.1 # add the contrastive loss to the total loss    
+                        ar = torch.tensor(0, dtype=torch.float32) 
+                        metrics.commit(ar_loss=ar,diff_loss=loss) 
+                        loss += output.contrastive_loss # add the contrastive loss to the total loss    
                     else: 
                         output = self.vlm(
                             input_ids=batch["input_ids"],
