@@ -99,6 +99,7 @@ class TrainConfig:
     action_tokenizer_exist: bool = False
     use_diff: bool = False
     ar_diff_loss: bool = False
+    use_reconstruction: bool = False
     
     llm_vision_layers: int = 8
     llm_action_layers: int = 8
@@ -207,6 +208,7 @@ def train(cfg: TrainConfig) -> None:
                         use_ema=cfg.use_ema,
                         class_dropout_prob=cfg.class_dropout_prob,
                         use_diff=cfg.use_diff,
+                        use_reconstruction=cfg.use_reconstruction,
                         llm_vision_layers=cfg.llm_vision_layers,
                         llm_action_layers=cfg.llm_action_layers,
                         llm_action_layers_stride=cfg.llm_action_layers_stride
@@ -227,6 +229,7 @@ def train(cfg: TrainConfig) -> None:
                     past_action_window_size=cfg.past_action_window_size,
                     use_ema=cfg.use_ema,
                     use_diff = cfg.use_diff,
+                    use_reconstruction = cfg.use_reconstruction,
                     llm_vision_layers=cfg.llm_vision_layers,
                     llm_action_layers=cfg.llm_action_layers,
                     llm_action_layers_stride=cfg.llm_action_layers_stride
@@ -237,6 +240,7 @@ def train(cfg: TrainConfig) -> None:
         vlm = load(
                     cfg.vla.base_vlm, hf_token=hf_token, load_for_training=True,
                     use_diff=cfg.use_diff,
+                    use_reconstruction=cfg.use_reconstruction,
                     llm_vision_layers=cfg.llm_vision_layers,
                     llm_action_layers=cfg.llm_action_layers,
                     llm_action_layers_stride=cfg.llm_action_layers_stride
@@ -252,6 +256,7 @@ def train(cfg: TrainConfig) -> None:
                     past_action_window_size=cfg.past_action_window_size,
                     use_ema=cfg.use_ema,
                     use_diff = cfg.use_diff,
+                    use_reconstruction = cfg.use_reconstruction,
                     llm_vision_layers=cfg.llm_vision_layers,
                     llm_action_layers=cfg.llm_action_layers,
                     llm_action_layers_stride=cfg.llm_action_layers_stride
@@ -368,6 +373,7 @@ def train(cfg: TrainConfig) -> None:
         metrics,
         save_interval=cfg.save_interval,
         use_diff=cfg.use_diff,
+        use_reconstruction=cfg.use_reconstruction,
         repeated_diffusion_steps = cfg.repeated_diffusion_steps,
         ar_diff_loss = cfg.ar_diff_loss,
     )

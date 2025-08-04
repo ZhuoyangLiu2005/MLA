@@ -75,6 +75,7 @@ class RLDSBatchTransform:
 
         # image
         front_img = Image.fromarray(rlds_batch["observation"]["image_primary"][0])
+        next_front_img = Image.fromarray(rlds_batch["observation"]["image_next_primary"][0])
         wrist_img = None
         wrist_left_img = None
         if "image_wrist" in rlds_batch["observation"]:
@@ -85,11 +86,15 @@ class RLDSBatchTransform:
         
         image_mask = torch.ones(1, 672, 672)
         image = self.image_transform.preprocess(front_img, return_tensors='pt')['pixel_values'][0]   
+        if next_front_img is not None:
+            next_image = self.image_transform.preprocess(next_front_img, return_tensors='pt')['pixel_values'][0] if next_front_img is not None else None
         image = torch.cat([image, image_mask], dim=0)
         
         # pointcloud
-        front_pc = rlds_batch["observation"]["pointcloud"][0] # (n_points, 3)
+        front_pc = rlds_batch["observation"]["point_cloud"][0] # (n_points, 3)
+        next_front_pc = rlds_batch["observation"]["next_point_cloud"][0]
         front_pc = torch.tensor(front_pc).to(torch.float)
+        next_front_pc = torch.tensor(next_front_pc).to(torch.float)
 
         lang = rlds_batch["task"]["language_instruction"].decode().lower()
 
@@ -147,7 +152,16 @@ class RLDSBatchTransform:
         # print(input_ids)
         # input()
             
-        return dict(images = image, point_cloud = front_pc, input_ids=input_ids, labels=labels, dataset_name=dataset_name, actions=action, action_masks=action_mask, proprio = proprio)
+        return dict(images = image, 
+                    point_cloud = front_pc, 
+                    next_images = next_image,
+                    next_point_cloud = next_front_pc,
+                    input_ids=input_ids, 
+                    labels=labels, 
+                    dataset_name=dataset_name, 
+                    actions=action, 
+                    action_masks=action_mask, 
+                    proprio = proprio)
 
 
 class RLDSDataset(IterableDataset):
@@ -178,7 +192,7 @@ class RLDSDataset(IterableDataset):
         per_dataset_kwargs, weights = get_oxe_dataset_kwargs_and_weights(
             self.data_root_dir,
             mixture_spec,
-            load_camera_views=("primary",), # "primary", "wrist", "secondary"
+            load_camera_views=("primary","next_primary"), # "primary", "wrist", "secondary"
             load_depth=False,
             load_proprio=False,
             load_language=True,

@@ -103,10 +103,16 @@ class PaddedCollatorForActionPrediction:
         images = [instance["images"] for instance in instances]
         if isinstance(images[0], torch.Tensor):
             images = torch.stack(images)
+        next_images = [instance["next_images"] for instance in instances]
+        if isinstance(next_images[0], torch.Tensor):
+            next_images = torch.stack(next_images)
             
         point_cloud = [instance["point_cloud"] for instance in instances]
         if isinstance(point_cloud[0], torch.Tensor):
             point_cloud = torch.stack(point_cloud) # (B,N,3)
+        next_point_cloud = [instance["next_point_cloud"] for instance in instances]
+        if isinstance(next_point_cloud[0], torch.Tensor):
+            next_point_cloud = torch.stack(next_point_cloud)
         
         if "dataset_name" in instances[0]:
             dataset_names = [instance["dataset_name"] for instance in instances]
@@ -151,7 +157,9 @@ class PaddedCollatorForActionPrediction:
 
         output = dict(
             images=images,
+            next_images=next_images,
             point_cloud=point_cloud,
+            next_point_cloud=next_point_cloud,
             input_ids=input_ids,
             attention_mask=attention_mask,
             labels=labels,

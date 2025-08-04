@@ -60,6 +60,7 @@ class CogACT(nn.Module):
         use_ema: bool = False,
         norm_stats: Dict[str, Dict[str, Dict[str, Dict[str, List[float]]]]] = None,
         use_diff: bool = False,
+        use_reconstruction: bool = False,
         **kwargs,
     ) -> None:
         super().__init__()
@@ -108,7 +109,9 @@ class CogACT(nn.Module):
         input_ids: Optional[torch.LongTensor] = None,
         attention_mask: Optional[torch.Tensor] = None,
         images: Optional[torch.FloatTensor] = None,
+        next_images: Optional[torch.FloatTensor] = None,
         point_cloud: Optional[torch.FloatTensor] = None,
+        next_point_cloud: Optional[torch.FloatTensor] = None,
         pixel_values: Optional[torch.FloatTensor] = None,
         labels: Optional[torch.LongTensor] = None,
         actions: Optional[torch.FloatTensor] = None,
@@ -141,17 +144,21 @@ class CogACT(nn.Module):
             labels = labels.repeat(repeated_diffusion_steps, *([1] * (labels.ndimension() - 1)))
 
             images = images.repeat(repeated_diffusion_steps, *([1] * (images.ndimension() - 1)))
+            next_images = next_images.repeat(repeated_diffusion_steps, *([1] * (next_images.ndimension() - 1)))
             point_cloud = point_cloud.repeat(repeated_diffusion_steps, *([1] * (point_cloud.ndimension() - 1)))
+            next_point_cloud = next_point_cloud.repeat(repeated_diffusion_steps, *([1] * (next_point_cloud.ndimension() - 1)))
         
             noise = torch.randn_like(actions_future)  # [B, T, C]
             timestep = torch.randint(0, self.diffusion.num_timesteps, (actions_future.size(0),), device= actions.device)
             x = self.diffusion.q_sample(actions_future, timestep, noise)
 
-            output, noise_pred, = self.vlm(
+            output, noise_pred, reconstruction_outputs, reconstruction_losses = self.vlm(
                 input_ids=input_ids,
                 attention_mask=attention_mask,
                 images=images,
+                next_images=next_images,
                 point_cloud=point_cloud,
+                next_point_cloud=next_point_cloud,
                 labels=labels,
                 x=x,
                 t=timestep,
@@ -166,6 +173,12 @@ class CogACT(nn.Module):
             )
             assert noise_pred.shape == noise.shape == actions.shape
             loss = ((noise_pred - noise) ** 2).mean()
+            # loss metrics
+            print(f"Diffusion Loss: {loss.item()}, \
+                Image Reconstruction Loss: {reconstruction_losses['image_reconstruction_loss'].item()}, \
+                PointCloud Reconstruction Loss: {reconstruction_losses['pointcloud_coord_loss'].item()}, \
+                Contrastive Loss: {output.contrastive_loss.item()}")
+            loss += reconstruction_losses['total_reconstruction_loss']
             return loss, output
         else:
             output = self.vlm(

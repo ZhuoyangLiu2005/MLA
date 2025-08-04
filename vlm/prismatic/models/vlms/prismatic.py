@@ -17,6 +17,7 @@ from typing import Callable, Dict, List, Optional, Type, Union
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import numpy as np
 from PIL import Image
 from torch.distributed.fsdp.wrap import _module_wrap_policy, _or_policy
@@ -33,6 +34,7 @@ from prismatic.models.eve_tokenizer.vision_tokenizer import VisionTokenizer
 from prismatic.models.eve_tokenizer.vision_tokenizer import MLP_GELU
 from prismatic.models.fuser.contrastive import project_3d_to_2d, project_3d_to_2d_672_pyrep_compatible
 from prismatic.a2pmodels.backbone.pointvit import PointViT
+from prismatic.models.vlms.rec_vis import visualize_reconstruction
 
 from action_model import ActionEmbedder, TimestepEmbedder, LabelEmbedder, FinalLayer
 
@@ -164,6 +166,16 @@ class PrismaticVLM(VLM):
         use_diff = False,
         llm_vision_layers: int = 1,
         llm_action_layers: int = 1,
+        # === Reconstruction Parameters ===
+        use_reconstruction: bool = False,
+        recon_image: bool = True,
+        recon_pointcloud: bool = True,
+        num_image_recon_queries: int = 32,
+        num_pointcloud_recon_queries: int = 32,
+        recon_decoder_layers: int = 3,
+        recon_decoder_heads: int = 8,
+        image_patch_size: int = 42,  # EVE patch size
+        pointcloud_patch_size: int = 32,  # PointViT patch size
         **kwargs,
     ) -> None:
         super().__init__(
@@ -175,6 +187,15 @@ class PrismaticVLM(VLM):
         self.use_diff = use_diff
         self.llm_vision_layers = llm_vision_layers
         self.llm_action_layers = llm_action_layers
+        
+        # === Reconstruction Configuration ===
+        self.use_reconstruction = use_reconstruction
+        self.recon_image = recon_image and use_reconstruction
+        self.recon_pointcloud = recon_pointcloud and use_reconstruction
+        self.num_image_recon_queries = num_image_recon_queries
+        self.num_pointcloud_recon_queries = num_pointcloud_recon_queries
+        self.image_patch_size = image_patch_size
+        self.pointcloud_patch_size = pointcloud_patch_size
 
         # === Generation Utilities ===
         #   => For computing likelihoods --> get tokens corresponding to "True", "False" and "Yes", "No"
@@ -205,22 +226,122 @@ class PrismaticVLM(VLM):
                                         base_ckpt_path="/media/liuzhuoyang/new_vla/Any2Point/Any2Point_CLIP_Lang/ckpts/ViT-L-14.pt")
         self.projector_3d = MLPProjector(self.vision_tower_3d.embed_dim, token_size)
 
+        # === Diffusion Components ===
         self.proprio_embedder = ActionEmbedder(action_size=action_dim, hidden_size=token_size)
         if self.use_diff:
             self.x_embedder = ActionEmbedder(action_size=action_dim, hidden_size=token_size)
             self.t_embedder = TimestepEmbedder(token_size)
             self.z_embedder = LabelEmbedder(in_size=token_size, hidden_size=token_size, dropout_prob=self.class_dropout_prob)
             self.final_layer = FinalLayer(token_size, action_dim)
+            
+        # === Reconstruction Components ===
+        if self.use_reconstruction:
+            self._setup_reconstruction_modules(token_size, recon_decoder_layers, recon_decoder_heads)
 
         # Set Module Keys =>> used in Checkpoint Saving / Model Loading
         self.all_module_keys = ["vision_tower_2d", "vision_tower_3d","projector_2d", "projector_3d",
                                 "llm_backbone", "proprio_embedder"]
         if self.use_diff:
             self.all_module_keys.extend(["x_embedder", "t_embedder", "final_layer",])
+        if self.use_reconstruction:
+            self.all_module_keys.extend(self._get_reconstruction_module_keys())
         self.trainable_module_keys = []
 
         self.initialize_weights()
         self.vision_tower_3d.initialize_weights()
+        
+    def _setup_reconstruction_modules(self, token_size, decoder_layers, decoder_heads):
+        """Setup reconstruction-related modules"""
+        # === Reconstruction Query Tokens ===
+        if self.recon_image:
+            self.image_recon_queries = nn.Parameter(
+                torch.zeros(1, self.num_image_recon_queries, token_size)
+            )
+            
+        if self.recon_pointcloud:
+            self.pointcloud_recon_queries = nn.Parameter(
+                torch.zeros(1, self.num_pointcloud_recon_queries, token_size)
+            )
+
+        # === Image Reconstruction Components ===
+        if self.recon_image:
+            # Image reconstruction decoder
+            decoder_layer = nn.TransformerDecoderLayer(
+                d_model=token_size,
+                nhead=decoder_heads,
+                dim_feedforward=token_size * 4,
+                dropout=0.1,
+                activation='gelu',
+                batch_first=True
+            )
+            self.image_recon_decoder = nn.TransformerDecoder(decoder_layer, decoder_layers)
+            
+            # Image reconstruction heads
+            self.image_recon_projector = nn.Linear(token_size, self.mm_hidden_size)
+            
+            # Calculate output dimensions for EVE (672x672 image, patch_size=14)
+            self.image_num_patches = (672 // self.image_patch_size) ** 2  # 16*16=256
+            self.image_mask_tokens = nn.Parameter(
+                torch.zeros(1, self.image_num_patches, self.mm_hidden_size)
+            )
+            
+            # Position embeddings for image reconstruction
+            self.image_recon_pos_embed = nn.Parameter(
+                torch.zeros(1, self.num_image_recon_queries + self.image_num_patches, self.mm_hidden_size)
+            )
+            
+            # Final prediction head for image patches
+            self.image_patch_predictor = nn.Sequential(
+                nn.LayerNorm(self.mm_hidden_size),
+                nn.Linear(self.mm_hidden_size, self.image_patch_size ** 2 * 3)  # RGB channels
+            )
+
+        # === PointCloud Reconstruction Components ===
+        if self.recon_pointcloud:
+            # PointCloud reconstruction decoder  
+            decoder_layer = nn.TransformerDecoderLayer(
+                d_model=token_size,
+                nhead=decoder_heads,
+                dim_feedforward=token_size * 4,
+                dropout=0.1,
+                activation='gelu',
+                batch_first=True
+            )
+            self.pointcloud_recon_decoder = nn.TransformerDecoder(decoder_layer, decoder_layers)
+            
+            # PointCloud reconstruction heads
+            self.pointcloud_recon_projector = nn.Linear(token_size, 768)  # PointViT embed_dim
+            
+            # For pointcloud, we'll predict coordinates and features
+            self.pointcloud_num_patches = 1024  # Typical number of point patches
+            self.pointcloud_mask_tokens = nn.Parameter(
+                torch.zeros(1, self.pointcloud_num_patches, 768)
+            )
+            
+            # Position embeddings for pointcloud reconstruction
+            self.pointcloud_recon_pos_embed = nn.Parameter(
+                torch.zeros(1, self.num_pointcloud_recon_queries + self.pointcloud_num_patches, 768)
+            )
+            
+            # Final prediction heads for pointcloud
+            self.pointcloud_coord_predictor = nn.Sequential(
+                nn.LayerNorm(768),
+                nn.Linear(768, 3)  # XYZ coordinates
+            )
+            
+    def _get_reconstruction_module_keys(self):
+        """Get module keys for reconstruction components"""
+        keys = []
+        if self.recon_image:
+            keys.extend([
+                "image_recon_decoder", "image_recon_projector", "image_patch_predictor"
+            ])
+        if self.recon_pointcloud:
+            keys.extend([
+                "pointcloud_recon_decoder", "pointcloud_recon_projector", 
+                "pointcloud_coord_predictor",
+            ])
+        return keys
     
     def get_vision_tower_2d(self):
         vision_tower_2d = getattr(self, 'vision_tower_2d', None)
@@ -244,6 +365,19 @@ class PrismaticVLM(VLM):
                 nn.init.constant_(module.bias, 0)     # LayerNorm beta初始化为0
 
         self.apply(_basic_init)
+        
+        # Initialize reconstruction components
+        if self.use_reconstruction:
+            if self.recon_image:
+                nn.init.normal_(self.image_recon_queries, std=0.02)
+                nn.init.normal_(self.image_mask_tokens, std=0.02)
+                # Initialize position embeddings with sinusoidal patterns
+                self._init_pos_embed(self.image_recon_pos_embed)
+                
+            if self.recon_pointcloud:
+                nn.init.normal_(self.pointcloud_recon_queries, std=0.02)
+                nn.init.normal_(self.pointcloud_mask_tokens, std=0.02)
+                self._init_pos_embed(self.pointcloud_recon_pos_embed)
 
         if self.use_diff:
             nn.init.normal_(self.x_embedder.mlp.fc1.weight, std=0.02)
@@ -260,6 +394,11 @@ class PrismaticVLM(VLM):
             nn.init.constant_(self.final_layer.mlp.fc2.weight, 0)
             nn.init.constant_(self.final_layer.mlp.fc2.bias, 0)
             
+    def _init_pos_embed(self, pos_embed):
+        """Initialize position embeddings with sinusoidal encoding"""
+        # Simple initialization - can be replaced with sinusoidal encoding
+        nn.init.normal_(pos_embed, std=0.02)
+    
     def load_encoder_to_vision_tower(self, ckpt_path, vision_tower_3d):
         """
         从保存的检查点加载 encoder 参数到 vision_tower_3d
@@ -267,15 +406,12 @@ class PrismaticVLM(VLM):
             ckpt_path: 保存的 .pth 检查点路径
             vision_tower_3d: PointViT 实例 (self.vision_tower_3d)
         """
-        # 1. 加载检查点
         checkpoint = torch.load(ckpt_path, map_location='cpu')
         if 'model' not in checkpoint:
             raise KeyError(f"检查点中缺少 'model' 键。可用键: {checkpoint.keys()}")
 
-        # 2. 提取 encoder 参数
         model_state = checkpoint['model']
         
-        # 2.1 查找 encoder 参数 (假设键名以 'encoder.' 开头)
         encoder_state = {
             k.replace('encoder.', ''): v 
             for k, v in model_state.items() 
@@ -285,16 +421,13 @@ class PrismaticVLM(VLM):
         if not encoder_state:
             raise KeyError(f"未找到 encoder 参数。示例键名: {list(model_state.keys())[:5]}")
 
-        # 3. 处理多GPU前缀 (如果 vision_tower_3d 是 DataParallel/DistributedDataParallel 包装的)
-        if hasattr(vision_tower_3d, 'module'):  # 多GPU情况
+        if hasattr(vision_tower_3d, 'module'): 
             vision_tower = vision_tower_3d.module
         else:
             vision_tower = vision_tower_3d
 
-        # 4. 加载参数 (非严格模式，允许部分不匹配)
         missing_keys, unexpected_keys = vision_tower.load_state_dict(encoder_state, strict=False)
         
-        # 5. 打印调试信息
         print(f"成功加载 {len(encoder_state)} 个参数到 vision_tower_3d")
         if missing_keys:
             print(f"! 缺失参数 ({len(missing_keys)} 个):\n  {missing_keys[:3]}...")
@@ -399,6 +532,9 @@ class PrismaticVLM(VLM):
             if self.use_diff:
                 self.trainable_module_keys.extend(["x_embedder", "t_embedder","final_layer"])
 
+            if self.use_reconstruction:
+                self.trainable_module_keys.extend(self._get_reconstruction_module_keys())
+
             # Update Trackers
             self.vision_backbone_requires_grad = False
 
@@ -408,6 +544,7 @@ class PrismaticVLM(VLM):
             overwatch.info(f"[TRAINABLE] 🔥 =>> LLM Backbone `{self.llm_backbone.identifier}`", ctx_level=1)
             overwatch.info(f"[TRAINABLE] 🔥 =>> Projector 2D ", ctx_level=1)
             overwatch.info(f"[TRAINABLE] 🔥 =>> Projector 3D ", ctx_level=1)
+            overwatch.info(f"[TRAINABLE] 🔥 =>> Reconstruct modules ", ctx_level=1)
 
         elif stage in {"full-finetune", "vla-full-train"}:
             self.vision_tower_2d.requires_grad_(True)
@@ -422,6 +559,8 @@ class PrismaticVLM(VLM):
                                           "llm_backbone", "proprio_embedder"]
             if self.use_diff:
                 self.trainable_module_keys.extend(["x_embedder", "t_embedder", "final_layer"])
+            if self.use_reconstruction:
+                self.trainable_module_keys.extend(self._get_reconstruction_module_keys())
 
             # Update Trackers
             self.vision_backbone_requires_grad = True
@@ -432,6 +571,7 @@ class PrismaticVLM(VLM):
             overwatch.info(f"[TRAINABLE] 🔥 =>> LLM Backbone `{self.llm_backbone.identifier}`", ctx_level=1)
             overwatch.info(f"[TRAINABLE] 🔥 =>> Projector 2D ", ctx_level=1)
             overwatch.info(f"[TRAINABLE] 🔥 =>> Projector 3D ", ctx_level=1)
+            overwatch.info(f"[TRAINABLE] 🔥 =>> Reconstruct modules ", ctx_level=1)
 
         elif stage in {"last-layer-finetune", "vla-last-layer-train"}:
             self.vision_tower_2d.requires_grad_(False)
@@ -618,6 +758,156 @@ class PrismaticVLM(VLM):
 
         return projected_fused_tokens, patch_indices, valid_mask
     
+    def reconstruct_modalities(self, llm_hidden_states, batch_size):
+        """
+        Perform multimodal reconstruction using query tokens
+        
+        Args:
+            llm_hidden_states: Hidden states from LLM backbone [B, seq_len, hidden_dim]
+            batch_size: Batch size
+            
+        Returns:
+            Dictionary containing reconstruction outputs and losses
+        """
+        reconstruction_outputs = {}
+        
+        # Extract memory for cross-attention (use all LLM hidden states as memory)
+        memory = llm_hidden_states  # [B, seq_len, token_size]
+        
+        if self.recon_image:
+            # === Image Reconstruction ===
+            # Expand query tokens for batch
+            image_queries = self.image_recon_queries.expand(batch_size, -1, -1)  # [B, num_queries, token_size]
+            
+            # Cross-attention with LLM hidden states
+            image_recon_features = self.image_recon_decoder(
+                tgt=image_queries,
+                memory=memory
+            )  # [B, num_queries, token_size]
+            
+            # Project to image feature space
+            image_recon_proj = self.image_recon_projector(image_recon_features)  # [B, num_queries, mm_hidden_size]
+            
+            # Add mask tokens for reconstruction
+            image_mask_tokens = self.image_mask_tokens.expand(batch_size, -1, -1)  # [B, num_patches, mm_hidden_size]
+            
+            # Concatenate query features and mask tokens
+            image_decoder_input = torch.cat([image_recon_proj, image_mask_tokens], dim=1)  # [B, num_queries + num_patches, mm_hidden_size]
+            
+            # Add position embeddings
+            image_decoder_input = image_decoder_input + self.image_recon_pos_embed
+            
+            # Predict image patches (only use mask token outputs)
+            image_mask_features = image_decoder_input[:, self.num_image_recon_queries:, :]  # [B, num_patches, mm_hidden_size]
+            image_patch_pred = self.image_patch_predictor(image_mask_features)  # [B, num_patches, patch_size^2 * 3]
+            
+            reconstruction_outputs['image_reconstruction'] = image_patch_pred
+
+        if self.recon_pointcloud:
+            # === PointCloud Reconstruction ===
+            # Expand query tokens for batch  
+            pc_queries = self.pointcloud_recon_queries.expand(batch_size, -1, -1)  # [B, num_queries, token_size]
+            
+            # Cross-attention with LLM hidden states
+            pc_recon_features = self.pointcloud_recon_decoder(
+                tgt=pc_queries,
+                memory=memory
+            )  # [B, num_queries, token_size]
+            
+            # Project to pointcloud feature space
+            pc_recon_proj = self.pointcloud_recon_projector(pc_recon_features)  # [B, num_queries, 768]
+            
+            # Add mask tokens for reconstruction
+            pc_mask_tokens = self.pointcloud_mask_tokens.expand(batch_size, -1, -1)  # [B, num_patches, 768]
+            
+            # Concatenate query features and mask tokens
+            pc_decoder_input = torch.cat([pc_recon_proj, pc_mask_tokens], dim=1)  # [B, num_queries + num_patches, 768]
+            
+            # Add position embeddings
+            pc_decoder_input = pc_decoder_input + self.pointcloud_recon_pos_embed
+            
+            # Predict pointcloud coordinates and features (only use mask token outputs)
+            pc_mask_features = pc_decoder_input[:, self.num_pointcloud_recon_queries:, :]  # [B, num_patches, 768]
+            pc_coord_pred = self.pointcloud_coord_predictor(pc_mask_features)  # [B, num_patches, 3]
+            
+            reconstruction_outputs['pointcloud_coord_reconstruction'] = pc_coord_pred
+
+        return reconstruction_outputs
+    
+    def compute_reconstruction_losses(self, reconstruction_outputs, next_images=None, next_point_cloud=None):
+        """
+        Compute reconstruction losses
+        
+        Args:
+            reconstruction_outputs: Outputs from reconstruct_modalities
+            next_images: Ground truth next frame images [B, C, H, W]
+            next_point_cloud: Ground truth next frame pointclouds [B, N, 6] (XYZ + RGB)
+            
+        Returns:
+            Dictionary containing individual losses and total reconstruction loss
+        """
+        losses = {}
+        total_loss = 0.0
+        
+        if self.recon_image and 'image_reconstruction' in reconstruction_outputs and next_images is not None:
+            # Convert image to patches for comparison
+            B, C, H, W = next_images.shape
+            next_images_patches = self._images_to_patches(next_images)  # [B, num_patches, patch_size^2 * 3]
+            
+            image_pred = reconstruction_outputs['image_reconstruction']
+            image_recon_loss = F.mse_loss(image_pred, next_images_patches)
+            losses['image_reconstruction_loss'] = image_recon_loss
+            total_loss += image_recon_loss
+
+        def chamfer_distance(pred, gt):
+            # pred/gt: [B, N, 3]
+            dist = torch.cdist(pred, gt)  # [B, N, M]
+            loss = dist.min(dim=2)[0].mean() + dist.min(dim=1)[0].mean()
+            return loss
+
+        if self.recon_pointcloud and next_point_cloud is not None:
+            if 'pointcloud_coord_reconstruction' in reconstruction_outputs:
+                # Extract coordinates from ground truth
+                assert next_point_cloud.shape[2] == 3, "Point cloud must have 3 dimensions (XYZ)"
+
+                # # Subsample or pad to match prediction size
+                # next_pc_coords_resampled = self._resample_pointcloud(next_point_cloud, self.pointcloud_num_patches)
+                
+                pc_coord_pred = reconstruction_outputs['pointcloud_coord_reconstruction']
+                pc_coord_loss = chamfer_distance(pc_coord_pred, next_point_cloud) 
+                # pc_coord_loss = F.mse_loss(pc_coord_pred, next_point_cloud)
+                losses['pointcloud_coord_loss'] = pc_coord_loss
+                total_loss += pc_coord_loss
+
+        losses['total_reconstruction_loss'] = total_loss
+        return losses
+    
+    def _images_to_patches(self, images):
+        """Convert images to patches for reconstruction loss computation"""
+        B, C, H, W = images.shape
+        patch_size = self.image_patch_size
+        
+        # Reshape to patches
+        patches = images.unfold(2, patch_size, patch_size).unfold(3, patch_size, patch_size)
+        patches = patches.contiguous().view(B, C, -1, patch_size, patch_size)
+        patches = patches.permute(0, 2, 1, 3, 4).contiguous().view(B, -1, C * patch_size * patch_size)
+        
+        return patches
+    
+    def _resample_pointcloud(self, pointcloud, target_size):
+        """Resample pointcloud to target size"""
+        B, N, D = pointcloud.shape
+        
+        if N >= target_size:
+            # Random sampling
+            indices = torch.randperm(N)[:target_size]
+            return pointcloud[:, indices, :]
+        else:
+            # Pad with zeros or repeat
+            pad_size = target_size - N
+            padding = torch.zeros(B, pad_size, D, device=pointcloud.device)
+            return torch.cat([pointcloud, padding], dim=1)
+    
     def forward(
         self,
         x: Optional[torch.FloatTensor] = None,
@@ -638,11 +928,16 @@ class PrismaticVLM(VLM):
         multimodal_indices: Optional[torch.LongTensor] = None,
         gen_discret_action:  Optional[torch.LongTensor] = None,
         use_diff: Optional[bool] = None,
+        # === Reconstruction Ground Truth ===
+        next_images: Optional[torch.FloatTensor] = None,
+        next_point_cloud: Optional[torch.FloatTensor] = None,
         **kwargs,
     ): 
         """Run a forward pass through the VLM, returning a CausalLMOutputWithPast instance (contains loss)."""
         if use_diff is not None:
             self.use_diff = use_diff
+            
+        # Convert to bfloat16 if needed
         if proprio is not None:
             proprio = proprio.to(torch.bfloat16)
         if x is not None:
@@ -656,11 +951,10 @@ class PrismaticVLM(VLM):
             tag_0, tag_1 = 2, 0
             tag_2 = 3 ## EOD(32002) + _(29871) + 7dof + EOS(2)
         else:
-            # tag_0, tag_1 = 32001, -1
-            # tag_2 = 0
             tag_0, tag_1 = 29871, -1
             tag_2 = 0
         
+        # Handle simple cases
         if input_ids.shape[1] == 1 and past_key_values is not None:
             output = self.llm_backbone(
                 input_ids=input_ids,
@@ -679,10 +973,9 @@ class PrismaticVLM(VLM):
         elif input_ids.shape[1] == 1 or images is None:
             raise RuntimeError("Invalid `forward()` call!")
 
-        # Handle Multimodal Indices is None --> pretend like the batch is fully multimodal (always image + text)!
+        # Handle multimodal indices
         if multimodal_indices is None:
             multimodal_indices = torch.arange(len(input_ids), dtype=torch.long, device=input_ids.device)
-        # Handle Multimodal Indices is Empty (len == 0) --> simple unimodal forward
         elif len(multimodal_indices) == 0:
             output = self.llm_backbone(
                 input_ids=input_ids,
@@ -698,18 +991,19 @@ class PrismaticVLM(VLM):
             )
             return output, None
         
-        # _input_ids = input_ids
         
         # get image and point_cloud embeddings
         point_cloud = point_cloud.to(self.device) 
         projected_fused_embeddings, patch_indices, valid_mask= self.get_fused_tokens(images, point_cloud) 
-        # projected_fused_embeddings= self.get_fused_tokens(images, point_cloud) # 注意返回的token的数量
         input_embeddings = self.llm_backbone.embed_input_ids(input_ids)
+        
+        # Create initial embeddings with fused tokens
         z = torch.cat([input_embeddings[:, :1, :], 
                        projected_fused_embeddings, 
                        input_embeddings[:, 1:, :]], dim=1
                     )
         
+        # Token layout tracking
         N_pc = projected_fused_embeddings.shape[1] // 2
         N_img = projected_fused_embeddings.shape[1] // 2
         bos_token_len = 1
@@ -718,12 +1012,14 @@ class PrismaticVLM(VLM):
         img_tokens_start_idx = pc_tokens_end_idx
         img_tokens_end_idx = img_tokens_start_idx + N_img
 
+        # Process proprio and diffusion embeddings
         proprio = self.proprio_embedder(proprio)
         if self.use_diff:
             z = self.z_embedder(z, self.training)
             x = self.x_embedder(x)
             t = self.t_embedder(t).unsqueeze(1) if t is not None else None
         
+        # Build multimodal embeddings with complex token layout
         multimodal_embeddings = []
         multimodal_attention_mask = []
         multimodal_labels = []
@@ -829,6 +1125,27 @@ class PrismaticVLM(VLM):
             compute_token_contrastive_loss=True, 
         )
         
+        # === Reconstruction Forward Pass ===
+        reconstruction_outputs = {}
+        reconstruction_losses = {}
+        
+        if self.use_reconstruction and self.training and output.hidden_states is not None:
+            # Use the last layer hidden states for reconstruction
+            llm_hidden_states = output.hidden_states[-1]  # [B, seq_len, hidden_dim]
+            
+            # Perform multimodal reconstruction
+            reconstruction_outputs = self.reconstruct_modalities(
+                llm_hidden_states, 
+                batch_size=fused_embeddings.shape[0]
+            )
+            
+            assert next_images is not None and next_point_cloud is not None, "Reconstruction requires ground truth images and point clouds!"
+            reconstruction_losses = self.compute_reconstruction_losses(
+                reconstruction_outputs, 
+                next_images=next_images, 
+                next_point_cloud=next_point_cloud
+            )
+        
         if self.use_diff:
             last_hidden = output.hidden_states[-1]
             last_hidden = self.final_layer(last_hidden)
@@ -841,9 +1158,19 @@ class PrismaticVLM(VLM):
                 noise_pred.append(last_hidden[i, noise_start:noise_end, :].unsqueeze(0))
             
             noise_pred = torch.cat(noise_pred, dim=0)
-            return output, noise_pred
+            
+            # # Return with reconstruction information
+            if self.training:
+                visualize_reconstruction(reconstruction_outputs, next_images, next_point_cloud, "/media/liuzhuoyang/new_vla/Rec_Diff_beta/LLM_policy/recon_vis")
+                return output, noise_pred, reconstruction_outputs, reconstruction_losses
+            else:
+                return output, noise_pred
         
-        return output # autoregressive
+        # # Return with reconstruction information
+        if self.use_reconstruction and self.training:
+            return output, reconstruction_outputs, reconstruction_losses
+        else:
+            return output # autoregressive
         
         
     def prepare_inputs_for_generation(

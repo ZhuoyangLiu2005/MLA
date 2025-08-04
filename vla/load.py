@@ -58,6 +58,7 @@ def load(
     load_for_training: bool = False,
     class_dropout_prob: float = 0.0,
     use_diff: bool = False,
+    use_reconstruction: bool = False,
     llm_vision_layers: int = 8,
     llm_action_layers: int = 8,
     llm_action_layers_stride: int = 2,
@@ -124,6 +125,7 @@ def load(
         freeze_weights=not load_for_training,
         class_dropout_prob=class_dropout_prob,
         use_diff=use_diff,
+        use_reconstruction=use_reconstruction,
     )
 
     return vlm
@@ -137,6 +139,7 @@ def load_openvla(
     load_for_training: bool = False,
     class_dropout_prob: float = 0.0,
     use_diff: bool = False,
+    use_reconstruction: bool = False,
     llm_vision_layers: int = 8,
     llm_action_layers: int = 8,
     llm_action_layers_stride: int = 2,
@@ -222,6 +225,7 @@ def load_openvla(
         freeze_weights=not load_for_training,
         class_dropout_prob=class_dropout_prob,
         use_diff=use_diff,
+        use_reconstruction=use_reconstruction,
     )
     return vlm
 
@@ -235,6 +239,7 @@ def load_vla(
     model_type: str = "pretrained",
     class_dropout_prob: float=0.0,
     use_diff: bool = False,
+    use_reconstruction: bool = False,
     llm_vision_layers: int = 8,
     llm_action_layers: int = 8,
     llm_action_layers_stride: int = 2,
@@ -328,6 +333,7 @@ def load_vla(
         norm_stats=norm_stats,
         class_dropout_prob=class_dropout_prob,
         use_diff=use_diff,
+        use_reconstruction=use_reconstruction,
         **kwargs,
     )
     # 30.5G

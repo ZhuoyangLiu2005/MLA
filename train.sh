@@ -1,12 +1,12 @@
 # 每次开始训练记得检查视角！！！
 
-cd /media/liuzhuoyang/new_vla/Diff_VLA_beta/CogACT
+cd /media/liuzhuoyang/new_vla/Rec_Diff_beta/LLM_policy
 export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 export HF_HOME=/media/huggingface
 
-export PYTHONPATH=/media/liuzhuoyang/new_vla/Diff_VLA_beta/CogACT:$PYTHONPATH
-export PYTHONPATH=/media/liuzhuoyang/new_vla/Diff_VLA_beta/CogACT/vlm:$PYTHONPATH
-export PYTHONPATH=/media/liuzhuoyang/new_vla/Diff_VLA_beta/CogACT/transformers:$PYTHONPATH
+export PYTHONPATH=/media/liuzhuoyang/new_vla/Rec_Diff_beta/LLM_policy:$PYTHONPATH
+export PYTHONPATH=/media/liuzhuoyang/new_vla/Rec_Diff_beta/LLM_policy/vlm:$PYTHONPATH
+export PYTHONPATH=/media/liuzhuoyang/new_vla/Rec_Diff_beta/LLM_policy/transformers:$PYTHONPATH
 
 export HF_HUB_OFFLINE=1
 export TRANSFORMERS_OFFLINE=1
@@ -21,14 +21,15 @@ FREEZE_VISON=true
 FREEZE_LLM=false
 ACTION_TOKENIZER_EXIST=false
 USE_DIFF=true
+USE_REC=true
 AR_DIFF_LOSS=false
 REPEATED_DIFFUSION_STEPS=4
 CLASS_DROPOUT_PROB=0.0
-PRETRAIN=2D_0623_E2
+PRETRAIN=Diff_300
 LLM_VISION_LAYERS=8
 LLM_ACTION_LAYERS=8
 
-SETTING=Pretrain${PRETRAIN}_FreezeVis${FREEZE_VISON}_Window${FUTURE_ACTION_STEPS}_Diff${USE_DIFF}_Contrastive_Vislayer${LLM_VISION_LAYERS}_1024_0403_0801
+SETTING=Pretrain${PRETRAIN}_FreezeVis${FREEZE_VISON}_Window${FUTURE_ACTION_STEPS}_Diff${USE_DIFF}_Rec${USE_REC}Vis_Contrastive_Vislayer${LLM_VISION_LAYERS}_1024_0403_0803
 
 TASK=4tasks_selected_keyframe_pointcloud_1024_0403
 NUM_GPUS=8
@@ -37,8 +38,8 @@ BATCH_SIZE=8
 EPOCHS=400
 LEARNING_RATE=2e-5
 
-DATA_ROOT=/media/rlds_data
-EXP_ROOT=/media/liuzhuoyang/new_vla/Diff_VLA_beta/exp
+DATA_ROOT=/media/liuzhuoyang/data/rlbench/rlds
+EXP_ROOT=/media/liuzhuoyang/new_vla/Rec_Diff_beta/exp
 
 torchrun --standalone --nnodes ${NODES} --nproc-per-node ${NUM_GPUS} scripts/train.py \
   --vla.type prism-dinosiglip-224px+oxe+diffusion \
@@ -57,16 +58,17 @@ torchrun --standalone --nnodes ${NODES} --nproc-per-node ${NUM_GPUS} scripts/tra
   --image_aug false \
   --wandb_project one_model_vla_sft \
   --wandb_entity liumail2023-peking-university \
-  --save_interval 100 \
+  --save_interval 1000 \
   --action_dim 7 \
   --repeated_diffusion_steps ${REPEATED_DIFFUSION_STEPS} \
   --action_tokenizer_exist ${ACTION_TOKENIZER_EXIST} \
   --future_action_window_size ${FUTURE_ACTION_STEPS} \
   --class_dropout_prob ${CLASS_DROPOUT_PROB} \
   --use_diff ${USE_DIFF} \
+  --use_reconstruction ${USE_REC} \
   --ar_diff_loss ${AR_DIFF_LOSS} \
   --is_resume False \
-  --pretrained_checkpoint "/media/liuzhuoyang/new_vla/2D_VLA_beta/pretrain-exp/exp_rtx_dataset_4_freeze_vit_window0_baidu_2d_pretrain_0623/checkpoints/step-067024-epoch-02-loss=8.4536.pt"
+  --pretrained_checkpoint "/media/liuzhuoyang/new_vla/Diff_VLA_beta/exp/exp_4tasks_selected_keyframe_pointcloud_1024_0403_Pretrain2D_0623_E2_FreezeVistrue_Window0_Difftrue_Contrastive_Vislayer8_1024_0403_0801/checkpoints/step-007803-epoch-300-loss=1.2505.pt"
   # --pretrained_checkpoint "/media/huggingface/hub/models--openvla--openvla-7b/snapshots/31f090d05236101ebfc381b61c674dd4746d4ce0"
   # --pretrained_checkpoint "/media/liuzhuoyang/new_vla/2D_VLA_beta/pretrain_exp/exp_rtx_dataset_4_freeze_vit_window0_huoshan_eve_pretrain/checkpoints/step-201072-epoch-01-loss=1.7223.pt"
   # --pretrained_checkpoint "/media/huggingface/hub/models--CogACT--CogACT-Base/snapshots/6550bf0992f162fc5d74f14ffee30771a9433363/checkpoints/CogACT-Base.pt"

@@ -60,7 +60,7 @@ OXE_DATASET_CONFIGS = {
         "action_encoding": ActionEncoding.EEF_POS,
     },
     "rlbench": {
-        "image_obs_keys": {"primary": "front_image", "wrist": "wrist_image","secondary": "wrist_image_left"},
+        "image_obs_keys": {"primary": "front_image", "next_primary": "next_front_image","secondary": "wrist_image_left"},
         "depth_obs_keys": {"primary": None, "secondary": None, "wrist": None},
         "state_obs_keys": ["base_pose_tool_reached", "gripper_closed"],
         "state_encoding": StateEncoding.POS_QUAT,

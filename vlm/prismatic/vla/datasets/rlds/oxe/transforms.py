@@ -823,6 +823,26 @@ def tdroid_dataset_transform(trajectory: Dict[str, Any]) -> Dict[str, Any]:
     trajectory["observation"]["gripper_state"] = trajectory["observation"]["gripper_position"][:, -1:]
     return trajectory
 
+def identity_transform_next(trajectory: Dict[str, Any]) -> Dict[str, Any]:
+    """Adds next_front_image and next_pointcloud to observations by shifting current frames.
+    
+    For each timestep:
+    - next_front_image is the front_image from the next timestep (or current if last)
+    - next_pointcloud is the pointcloud from the next timestep (or current if last)
+    """
+    # Get the front images and pointclouds
+    front_images = trajectory["observation"]["front_image"]
+    pointclouds = trajectory["observation"]["pointcloud"]
+    
+    next_front_image = tf.concat([front_images[1:], front_images[-1:]], axis=0)
+    next_pointcloud = tf.concat([pointclouds[1:], pointclouds[-1:]], axis=0)
+    
+    # Add the new fields to the observation dictionary
+    trajectory["observation"]["next_front_image"] = next_front_image
+    trajectory["observation"]["next_pointcloud"] = next_pointcloud
+    
+    return trajectory
+
 def identity_transform(trajectory: Dict[str, Any]) -> Dict[str, Any]:
     return trajectory
 
@@ -901,6 +921,6 @@ OXE_STANDARDIZATION_TRANSFORMS = {
     "droid_wipe": droid_finetuning_transform,
     ### custom Finetuning datasets
     "custom_finetuning": identity_transform,
-    "rlbench": identity_transform,
+    "rlbench": identity_transform_next,
     "rtx_dataset": identity_transform
 }
