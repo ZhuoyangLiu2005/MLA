@@ -29,7 +29,7 @@ PRETRAIN=Diff_300
 LLM_VISION_LAYERS=8
 LLM_ACTION_LAYERS=8
 
-SETTING=Pretrain${PRETRAIN}_FreezeVis${FREEZE_VISON}_Window${FUTURE_ACTION_STEPS}_Diff${USE_DIFF}_Rec${USE_REC}Vis_Contrastive_Vislayer${LLM_VISION_LAYERS}_1024_0403_0803
+SETTING=Pretrain${PRETRAIN}_FreezeVis${FREEZE_VISON}_Window${FUTURE_ACTION_STEPS}_Diff${USE_DIFF}_Rec${USE_REC}3D_Contrastive_Vislayer${LLM_VISION_LAYERS}_1024_0403_0804
 
 TASK=4tasks_selected_keyframe_pointcloud_1024_0403
 NUM_GPUS=8
@@ -58,7 +58,7 @@ torchrun --standalone --nnodes ${NODES} --nproc-per-node ${NUM_GPUS} scripts/tra
   --image_aug false \
   --wandb_project one_model_vla_sft \
   --wandb_entity liumail2023-peking-university \
-  --save_interval 1000 \
+  --save_interval 100 \
   --action_dim 7 \
   --repeated_diffusion_steps ${REPEATED_DIFFUSION_STEPS} \
   --action_tokenizer_exist ${ACTION_TOKENIZER_EXIST} \

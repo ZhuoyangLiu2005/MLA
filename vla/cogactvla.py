@@ -176,8 +176,9 @@ class CogACT(nn.Module):
             # loss metrics
             print(f"Diffusion Loss: {loss.item()}, \
                 Image Reconstruction Loss: {reconstruction_losses['image_reconstruction_loss'].item()}, \
-                PointCloud Reconstruction Loss: {reconstruction_losses['pointcloud_coord_loss'].item()}, \
-                Contrastive Loss: {output.contrastive_loss.item()}")
+                PointCloud Reconstruction Loss: {reconstruction_losses['pointcloud_coord_loss'].item()} , \
+                Contrastive Loss: {output.contrastive_loss.item()}") 
+            # reconstruction_losses['image_reconstruction_loss'].item(), reconstruction_losses['pointcloud_coord_loss'].item()
             loss += reconstruction_losses['total_reconstruction_loss']
             return loss, output
         else:
