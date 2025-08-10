@@ -832,7 +832,7 @@ def identity_transform_next(trajectory: Dict[str, Any]) -> Dict[str, Any]:
     """
     # Get the front images and pointclouds
     front_images = trajectory["observation"]["front_image"]
-    pointclouds = trajectory["observation"]["pointcloud"]
+    pointclouds = trajectory["observation"]["point_cloud"]
     
     next_front_image = tf.concat([front_images[1:], front_images[-1:]], axis=0)
     next_pointcloud = tf.concat([pointclouds[1:], pointclouds[-1:]], axis=0)

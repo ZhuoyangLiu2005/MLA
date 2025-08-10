@@ -319,7 +319,7 @@ class TrainingStrategy(ABC):
                         )
                         ar = torch.tensor(0, dtype=torch.float32) 
                         metrics.commit(ar_loss=ar,diff_loss=loss) 
-                        loss += output.contrastive_loss # add the contrastive loss to the total loss
+                        loss += output.contrastive_loss* 0.01 # add the contrastive loss to the total loss
                     else: 
                         output = self.vlm(
                             input_ids=batch["input_ids"],

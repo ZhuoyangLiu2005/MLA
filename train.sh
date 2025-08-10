@@ -29,13 +29,13 @@ PRETRAIN=Diff_300
 LLM_VISION_LAYERS=8
 LLM_ACTION_LAYERS=8
 
-SETTING=Pretrain${PRETRAIN}_FreezeVis${FREEZE_VISON}_Window${FUTURE_ACTION_STEPS}_Diff${USE_DIFF}_Rec${USE_REC}3D_Contrastive_Vislayer${LLM_VISION_LAYERS}_1024_0403_0804
+SETTING=Pretrain${PRETRAIN}_FreezeVis${FREEZE_VISON}_Window${FUTURE_ACTION_STEPS}_Diff${USE_DIFF}_Rec${USE_REC}only2dmaeall_Contrastive_Vislayer${LLM_VISION_LAYERS}_1024_0403_0810
 
-TASK=4tasks_selected_keyframe_pointcloud_1024_0403
+TASK=4tasks_selected_keyframe_nextpc_0806
 NUM_GPUS=8
 NODES=1
 BATCH_SIZE=8
-EPOCHS=400
+EPOCHS=300
 LEARNING_RATE=2e-5
 
 DATA_ROOT=/media/liuzhuoyang/data/rlbench/rlds

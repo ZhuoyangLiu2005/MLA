@@ -40,6 +40,8 @@ def visualize_reconstruction(reconstruction_outputs, next_images, next_pointclou
     
     if 'pointcloud_coord_reconstruction' in reconstruction_outputs and next_pointclouds is not None:
         coord_pred = reconstruction_outputs['pointcloud_coord_reconstruction'][batch_idx].detach().cpu().float().numpy()
+        # print(coord_pred.shape)
+        # input()
         gt_points = next_pointclouds[batch_idx, :, :3].detach().cpu().float().numpy()
 
         fig = plt.figure(figsize=(15, 6))

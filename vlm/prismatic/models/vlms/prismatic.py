@@ -169,12 +169,15 @@ class PrismaticVLM(VLM):
         # === Reconstruction Parameters ===
         use_reconstruction: bool = False,
         recon_image: bool = True,
-        recon_pointcloud: bool = True,
+        recon_pointcloud: bool = False,
         num_image_recon_queries: int = 32,
         num_pointcloud_recon_queries: int = 32,
         recon_decoder_layers: int = 3,
         recon_decoder_heads: int = 8,
         image_patch_size: int = 42, 
+        # === 新增MAE相关参数 ===
+        mae_mask_ratio: float = 1.0,  # ROI区域内的掩码比例，1.0代表完全掩盖
+        roi_dilation_kernel_size: int = 3, # ROI扩张的核大小，3代表向外扩张1圈
         **kwargs,
     ) -> None:
         super().__init__(
@@ -194,6 +197,10 @@ class PrismaticVLM(VLM):
         self.num_image_recon_queries = num_image_recon_queries
         self.num_pointcloud_recon_queries = num_pointcloud_recon_queries
         self.image_patch_size = image_patch_size
+        self.mae_mask_ratio = mae_mask_ratio
+        self.roi_dilation_kernel_size = roi_dilation_kernel_size
+        self.image_num_patches = 256
+
 
         # === Generation Utilities ===
         #   => For computing likelihoods --> get tokens corresponding to "True", "False" and "Yes", "No"
@@ -253,38 +260,36 @@ class PrismaticVLM(VLM):
             self.image_recon_queries = nn.Parameter(
                 torch.zeros(1, self.num_image_recon_queries, token_size)
             )
+            intent_decoder_layer = nn.TransformerDecoderLayer(
+                d_model=token_size, nhead=decoder_heads, dim_feedforward=token_size * 2,
+                dropout=0.1, activation='gelu', batch_first=True
+            )
+            self.intent_decoder = nn.TransformerDecoder(intent_decoder_layer, num_layers=2) 
+
+            self.mae_mask_token = nn.Parameter(torch.zeros(1, 1, token_size))
+            self.mae_pos_embed = nn.Parameter(torch.zeros(1, 256, token_size))
+            mae_decoder_layer = nn.TransformerDecoderLayer(
+                        d_model=token_size,
+                        nhead=decoder_heads,
+                        dim_feedforward=token_size * 4,
+                        dropout=0.1,
+                        activation='gelu',
+                        batch_first=True,
+                    )
+            self.mae_decoder = nn.TransformerDecoder(mae_decoder_layer, num_layers=decoder_layers)
+            patch_dim = self.image_patch_size ** 2 * 3
+            self.mae_patch_norm = nn.LayerNorm(token_size)
+            self.mae_delta_head = nn.Linear(token_size, patch_dim)
+            self.mae_alpha_head = nn.Linear(token_size, 1)
+            self.mae_offset_head = nn.Linear(token_size, 2)
+            self.recon_delta_clip = 5  # predicted delta will be tanh(...) * delta_clip (image value scale)
+            self.max_patch_shift_pixels = 8  # maximum allowed per-patch translation in pixels
+            self.use_patch_offset = True  # set False to disable warping and only use delta
             
         if self.recon_pointcloud:
             self.pointcloud_recon_queries = nn.Parameter(
                 torch.zeros(1, self.num_pointcloud_recon_queries, token_size)
             )
-
-        # === Image Reconstruction Components ===
-        if self.recon_image:
-            decoder_layer = nn.TransformerDecoderLayer(
-                d_model=token_size,
-                nhead=decoder_heads,
-                dim_feedforward=token_size * 4,
-                dropout=0.1,
-                activation='gelu',
-                batch_first=True,
-            )
-            self.image_recon_decoder = nn.TransformerDecoder(decoder_layer, decoder_layers)
-            self.image_recon_projector = nn.Linear(token_size, self.mm_hidden_size)
-            self.image_num_patches = (672 // self.image_patch_size) ** 2  # 16 * 16 = 256
-            self.image_mask_tokens = nn.Parameter(
-                torch.zeros(1, self.image_num_patches, self.mm_hidden_size)
-            )
-            self.image_recon_pos_embed = nn.Parameter(
-                torch.zeros(1, self.num_image_recon_queries + self.image_num_patches, self.mm_hidden_size)
-            )
-            self.image_patch_predictor = nn.Sequential(
-                nn.LayerNorm(self.mm_hidden_size),
-                nn.Linear(self.mm_hidden_size, self.image_patch_size ** 2 * 3)  # RGB channels
-            )
-
-        # === PointCloud Reconstruction Components ===
-        if self.recon_pointcloud:
             decoder_layer = nn.TransformerDecoderLayer(
                 d_model=token_size,
                 nhead=decoder_heads,
@@ -312,7 +317,7 @@ class PrismaticVLM(VLM):
         keys = []
         if self.recon_image:
             keys.extend([
-                "image_recon_decoder", "image_recon_projector", "image_patch_predictor"
+                "intent_decoder", "mae_decoder", "mae_patch_predictor"
             ])
         if self.recon_pointcloud:
             keys.extend([
@@ -348,8 +353,21 @@ class PrismaticVLM(VLM):
         if self.use_reconstruction:
             if self.recon_image:
                 nn.init.normal_(self.image_recon_queries, std=0.02)
-                nn.init.normal_(self.image_mask_tokens, std=0.02)
-                self._init_pos_embed(self.image_recon_pos_embed)
+                nn.init.normal_(self.mae_mask_token, std=0.02)
+                self._init_pos_embed(self.mae_pos_embed) # 使用你已有的_init_pos_embed
+                nn.init.normal_(self.mae_delta_head.weight, std=0.02)
+                if self.mae_delta_head.bias is not None:
+                    nn.init.constant_(self.mae_delta_head.bias, 0.0)
+
+                # alpha: bias negative so initially model prefers copying current patch (alpha ~ sigmoid(-3)~0.047)
+                nn.init.normal_(self.mae_alpha_head.weight, std=0.02)
+                if self.mae_alpha_head.bias is not None:
+                    nn.init.constant_(self.mae_alpha_head.bias, -3.0)
+
+                # offset: small init
+                nn.init.normal_(self.mae_offset_head.weight, std=0.001)
+                if self.mae_offset_head.bias is not None:
+                    nn.init.constant_(self.mae_offset_head.bias, 0.0)
                 
             if self.recon_pointcloud:
                 nn.init.normal_(self.pointcloud_recon_queries, std=0.02)
@@ -721,26 +739,267 @@ class PrismaticVLM(VLM):
         )
 
         return projected_fused_tokens, patch_indices, valid_mask
+
+    def _dilate_mask(self, mask, kernel_size):
+        """Dilate a boolean mask of shape [B, H, W] using max_pool2d safely."""
+        # mask: [B, H, W] (bool)
+        assert mask.dim() == 3, "Expected mask shape [B,H,W]"
+        padding = (kernel_size - 1) // 2
+        # Make it 4D: [B, C=1, H, W]
+        m = mask.float().unsqueeze(1)  # [B,1,H,W]
+        dil = F.max_pool2d(m, kernel_size=kernel_size, stride=1, padding=padding)
+        dil = (dil > 0.0).squeeze(1)   # [B,H,W] bool
+        return dil
+
+    def _create_roi_mask_from_indices(self, patch_indices: torch.Tensor) -> torch.Tensor:
+        """
+        根据点云投影到的2D patch坐标，创建一个[B, H, W]的ROI掩码。
+
+        Args:
+            patch_indices (torch.Tensor): 形状为 [B, N_points, 2]，
+                                        其中 N_points 是点云patch数量(256),
+                                        维度2是(y, x)坐标。
+
+        Returns:
+            torch.Tensor: 形状为 [B, H_patch, W_patch] 的布尔掩码, e.g., [B, 16, 16]。
+        """
+        batch_size = patch_indices.shape[0]
+        patch_grid_size = int(self.image_num_patches**0.5) # e.g., 16
+        
+        # 创建一个全为False的基础掩码
+        roi_mask = torch.zeros(
+            batch_size, 
+            patch_grid_size, 
+            patch_grid_size, 
+            dtype=torch.bool, 
+            device=patch_indices.device
+        )
+
+        # 使用高效的向量化索引来标记所有被点云投影覆盖的patch
+        # 1. 创建批次索引
+        batch_idx = torch.arange(batch_size, device=patch_indices.device).view(batch_size, 1)
+        
+        # 2. 提取y和x坐标
+        y_coords = patch_indices[..., 0]  # 所有点的y坐标
+        x_coords = patch_indices[..., 1]  # 所有点的x坐标
+        
+        # 3. 在对应的 [batch, y, x] 位置上设置为True
+        # 这个操作会处理掉重复的坐标，并将所有出现过的坐标位置都标记出来
+        roi_mask[batch_idx, y_coords, x_coords] = True
+        
+        return roi_mask
     
-    def reconstruct_modalities(self, llm_hidden_states, batch_size):
+    def reconstruct_modalities(self, 
+                               llm_hidden_states, 
+                               current_image_features,
+                               current_images_patches,
+                               roi_mask_2d,  
+                               batch_size,
+                               use_roi: bool = True
+                            ):
         reconstruction_outputs = {}
         memory = llm_hidden_states  # [B, seq_len, token_size]
         
         if self.recon_image:
-            # === Image Reconstruction ===
-            image_queries = self.image_recon_queries.expand(batch_size, -1, -1)  # [B, num_queries, token_size]
-            image_recon_features = self.image_recon_decoder(
-                tgt=image_queries,
-                memory=memory
-            )  # [B, num_queries, token_size]
-            image_recon_proj = self.image_recon_projector(image_recon_features)  # [B, num_queries, mm_hidden_size]
-            image_mask_tokens = self.image_mask_tokens.expand(batch_size, -1, -1)  # [B, num_patches, mm_hidden_size]
-            image_decoder_input = torch.cat([image_recon_proj, image_mask_tokens], dim=1)  # [B, num_queries + num_patches, mm_hidden_size]
-            image_decoder_input = image_decoder_input + self.image_recon_pos_embed
-            image_mask_features = image_decoder_input[:, self.num_image_recon_queries:, :]  # [B, num_patches, mm_hidden_size]
-            image_patch_pred = self.image_patch_predictor(image_mask_features)  # [B, num_patches, patch_size^2 * 3]
-            
-            reconstruction_outputs['image_reconstruction'] = image_patch_pred
+            # intent_queries = self.image_recon_queries.expand(batch_size, -1, -1)
+            # intent_features = self.intent_decoder(tgt=intent_queries, memory=memory)
+
+            # # robust dilation
+            # reconstruction_roi_mask_2d = self._dilate_mask(roi_mask_2d, self.roi_dilation_kernel_size)
+            # reconstruction_roi_mask = reconstruction_roi_mask_2d.view(batch_size, -1)  # [B, num_patches] bool
+
+            # # Prepare decoder input: replace content at mask positions with mask token, then add pos
+            # decoder_input_tokens = current_image_features.clone()  # [B, num_patches, token_size]
+            # mask_token_vec = self.mae_mask_token.view(-1)
+            # decoder_input_tokens[reconstruction_roi_mask] = mask_token_vec
+            # decoder_input_tokens = decoder_input_tokens + self.mae_pos_embed
+
+            # # run decoder
+            # reconstructed_features = self.mae_decoder(tgt=decoder_input_tokens, memory=intent_features)  # [B, num_patches, token_size]
+
+            # # Predict delta/alpha/offset FOR ALL PATCHES (so gradients flow globally)
+            # features_flat = reconstructed_features.view(-1, reconstructed_features.shape[-1])  # [B*num_patches, token_size]
+            # features_norm = self.mae_patch_norm(features_flat)
+            # delta_all = self.mae_delta_head(features_norm)  # [B*num_patches, patch_dim]
+            # alpha_all = torch.sigmoid(self.mae_alpha_head(features_norm).squeeze(-1))  # [B*num_patches]
+            # offset_all = self.mae_offset_head(features_norm)  # [B*num_patches, 2]
+
+            # # Reshape back
+            # B, num_patches, _ = reconstructed_features.shape
+            # patch_dim = self.image_patch_size ** 2 * 3
+            # delta_all = delta_all.view(B, num_patches, patch_dim)
+            # alpha_all = alpha_all.view(B, num_patches)  # in [0,1]
+            # offset_all = offset_all.view(B, num_patches, 2)
+
+            # # Apply scaling/clipping (assume images are standardized; delta_clip is relative scale)
+            # delta_all = torch.tanh(delta_all) * self.recon_delta_clip
+            # offset_all = torch.tanh(offset_all) * float(self.max_patch_shift_pixels)
+
+            # # current images patches: [B, num_patches, patch_dim]
+            # curr_patches = current_images_patches  # already provided
+            # # reshape to image patches for optional warping
+            # C = 3
+            # ps = self.image_patch_size
+            # curr_patches_img = curr_patches.view(B * num_patches, C, ps, ps)
+            # offset_all_img = offset_all.view(B * num_patches, 2)
+
+            # # If using offsets, do warp per-patch (but grid_sample needs float32)
+            # if self.use_patch_offset:
+            #     # build affine matrices for each patch
+            #     tx = offset_all_img[:, 0]  # pixels
+            #     ty = offset_all_img[:, 1]
+            #     tx_norm = 2.0 * tx / float(ps - 1)
+            #     ty_norm = 2.0 * ty / float(ps - 1)
+
+            #     affines = torch.zeros(B * num_patches, 2, 3, device=offset_all_img.device, dtype=offset_all_img.dtype)
+            #     affines[:, 0, 0] = 1.0
+            #     affines[:, 1, 1] = 1.0
+            #     affines[:, 0, 2] = tx_norm
+            #     affines[:, 1, 2] = ty_norm
+
+            #     # grid_sample doesn't support bfloat16 -> cast to float for grid_sample then cast back
+            #     curr_patches_img_f = curr_patches_img.float()
+            #     grid = F.affine_grid(affines.float(), size=(B * num_patches, C, ps, ps), align_corners=True)
+            #     warped = F.grid_sample(curr_patches_img_f, grid, mode='bilinear', padding_mode='border', align_corners=True)
+            #     warped = warped.to(curr_patches_img.dtype)  # keep original dtype (maybe bfloat16)
+            # else:
+            #     warped = curr_patches_img
+
+            # # apply delta (delta_all reshape)
+            # delta_img = delta_all.view(B * num_patches, C, ps, ps)
+
+            # # gen_weight = 0.95
+            # # pure_pred = delta_img
+            # # residual_pred = curr_patches_img + delta_img
+            # # roi_pred = (1 - gen_weight) * residual_pred + gen_weight * pure_pred
+            # # non_roi_pred = warped + delta_img
+            # # roi_mask_flat = reconstruction_roi_mask.view(B * num_patches, 1, 1, 1)  # 方便广播
+            # # predicted_img_patches = torch.where(
+            # #     roi_mask_flat,
+            # #     roi_pred,       # ROI 内
+            # #     non_roi_pred    # ROI 外
+            # # )
+
+            # # # roi_mask_flat = reconstruction_roi_mask.view(B * num_patches, 1, 1, 1)
+            # # # predicted_img_patches = torch.where(
+            # # #     roi_mask_flat.bool(),
+            # # #     delta_img,               # ROI 内
+            # # #     warped + delta_img       # ROI 外
+            # # # )
+
+            # # # predicted_img_patches = warped + delta_img  # still same dtype as warped/delta (watch dtype)
+
+            # # # blend with curr by alpha (alpha_all broadcast)
+            # # alpha_all = torch.where(
+            # #     reconstruction_roi_mask,              # 条件: ROI 位置
+            # #     torch.ones_like(alpha_all),            # ROI 内 -> 1.0
+            # #     alpha_all                              # ROI 外 -> 保留预测值
+            # # )
+            # # alpha_img = alpha_all.view(B * num_patches, 1, 1, 1)
+            # # blended = alpha_img * predicted_img_patches + (1.0 - alpha_img) * curr_patches_img
+
+
+            # # without roi
+            # gen_weight = 0.95
+            # pure_pred = delta_img
+            # residual_pred = curr_patches_img + delta_img
+            # predicted_img_patches = (1 - gen_weight) * residual_pred + gen_weight * pure_pred  # 全图用ROI内部逻辑
+
+            # # alpha 全部设为 1
+            # alpha_all = torch.ones_like(alpha_all)
+
+            # # blend
+            # alpha_img = alpha_all.view(B * num_patches, 1, 1, 1)
+            # blended = alpha_img * predicted_img_patches + (1.0 - alpha_img) * curr_patches_img
+
+
+
+            # # reshape back to [B, num_patches, patch_dim]
+            # blended_flat = blended.view(B, num_patches, -1)
+
+            # # Compose reconstructed_patches: for non-ROI we can still prefer copying current (but keep grads through delta)
+            # # We will keep final prediction as blended everywhere, but loss can focus on ROI
+            # reconstructed_patches = blended_flat
+
+            # reconstruction_outputs['image_reconstruction'] = reconstructed_patches
+            # reconstruction_outputs['reconstruction_roi_mask'] = reconstruction_roi_mask
+            # reconstruction_outputs['delta_all'] = delta_all
+
+            intent_queries = self.image_recon_queries.expand(batch_size, -1, -1)
+            intent_features = self.intent_decoder(tgt=intent_queries, memory=memory)
+
+            # decoder input (全图)
+            decoder_input_tokens = current_image_features.clone()
+            mask_token_vec = self.mae_mask_token.view(-1)
+            decoder_input_tokens = decoder_input_tokens + self.mae_pos_embed
+
+            # run decoder
+            reconstructed_features = self.mae_decoder(
+                tgt=decoder_input_tokens, 
+                memory=intent_features
+            )
+
+            # predict delta/alpha/offset (全图)
+            features_flat = reconstructed_features.view(-1, reconstructed_features.shape[-1])
+            features_norm = self.mae_patch_norm(features_flat)
+            delta_all = self.mae_delta_head(features_norm)
+            alpha_all = torch.sigmoid(self.mae_alpha_head(features_norm).squeeze(-1))
+            offset_all = self.mae_offset_head(features_norm)
+
+            # reshape back
+            B, num_patches, _ = reconstructed_features.shape
+            patch_dim = self.image_patch_size ** 2 * 3
+            delta_all = delta_all.view(B, num_patches, patch_dim)
+            alpha_all = alpha_all.view(B, num_patches)
+            offset_all = offset_all.view(B, num_patches, 2)
+
+            # clip
+            delta_all = torch.tanh(delta_all) * self.recon_delta_clip
+            offset_all = torch.tanh(offset_all) * float(self.max_patch_shift_pixels)
+
+            # prepare patch images
+            C = 3
+            ps = self.image_patch_size
+            curr_patches_img = current_images_patches.view(B * num_patches, C, ps, ps)
+
+            # offset warp if needed
+            if self.use_patch_offset:
+                tx = offset_all.view(-1, 2)[:, 0]
+                ty = offset_all.view(-1, 2)[:, 1]
+                tx_norm = 2.0 * tx / float(ps - 1)
+                ty_norm = 2.0 * ty / float(ps - 1)
+                affines = torch.zeros(B * num_patches, 2, 3, device=offset_all.device, dtype=offset_all.dtype)
+                affines[:, 0, 0] = 1.0
+                affines[:, 1, 1] = 1.0
+                affines[:, 0, 2] = tx_norm
+                affines[:, 1, 2] = ty_norm
+                curr_patches_img_f = curr_patches_img.float()
+                grid = F.affine_grid(affines.float(), size=(B * num_patches, C, ps, ps), align_corners=True)
+                warped = F.grid_sample(curr_patches_img_f, grid, mode='bilinear', padding_mode='border', align_corners=True)
+                warped = warped.to(curr_patches_img.dtype)
+            else:
+                warped = curr_patches_img
+
+            # delta image
+            delta_img = delta_all.view(B * num_patches, C, ps, ps)
+
+            # 全图统一重建逻辑
+            gen_weight = 0.95
+            pure_pred = delta_img
+            residual_pred = curr_patches_img + delta_img
+            predicted_img_patches = (1 - gen_weight) * residual_pred + gen_weight * pure_pred
+
+            # alpha 全 1
+            alpha_all = torch.ones_like(alpha_all)
+            alpha_img = alpha_all.view(B * num_patches, 1, 1, 1)
+            blended = alpha_img * predicted_img_patches + (1.0 - alpha_img) * curr_patches_img
+
+            reconstructed_patches = blended.view(B, num_patches, -1)
+
+            # outputs（不再返回 ROI mask）
+            reconstruction_outputs['image_reconstruction'] = reconstructed_patches
+            reconstruction_outputs['delta_all'] = delta_all
+            reconstruction_outputs['alpha_all'] = alpha_all
 
         if self.recon_pointcloud:
             # === PointCloud Reconstruction ===
@@ -760,18 +1019,65 @@ class PrismaticVLM(VLM):
 
         return reconstruction_outputs
     
-    def compute_reconstruction_losses(self, reconstruction_outputs, next_images=None, next_point_cloud=None):
+    def compute_reconstruction_losses(self, 
+        reconstruction_outputs, 
+        next_images=None, 
+        next_point_cloud=None,
+        current_point_cloud=None,
+    ):
         losses = {}
         total_loss = 0.0
         
         if self.recon_image and 'image_reconstruction' in reconstruction_outputs and next_images is not None:
-            B, C, H, W = next_images.shape
-            next_images_patches = self._images_to_patches(next_images)  # [B, num_patches, patch_size^2 * 3]
-            
-            image_pred = reconstruction_outputs['image_reconstruction']
-            image_recon_loss = F.mse_loss(image_pred, next_images_patches)
+            # reconstructed_patches = reconstruction_outputs['image_reconstruction']  # [B,256, patch_dim]
+            # reconstruction_roi_mask = reconstruction_outputs['reconstruction_roi_mask']  # [B,256] bool
+
+            # next_images_patches = self._images_to_patches(next_images)  # [B,256,patch_dim]
+            # curr_patches = None  # you have current_images_patches in calling scope; but recompute if needed
+
+            # pred_roi = reconstructed_patches[reconstruction_roi_mask]
+            # gt_roi = next_images_patches[reconstruction_roi_mask]
+
+            # if pred_roi.numel() > 0:
+            #     # main reconstruction objective (use both L2 and L1)
+            #     recon_mse = F.mse_loss(pred_roi, gt_roi)
+            #     recon_l1 = F.l1_loss(pred_roi, gt_roi)
+            #     image_recon_loss = recon_mse + 0.5 * recon_l1
+            #     losses['image_roi_reconstruction_loss'] = image_recon_loss
+            #     total_loss = total_loss + image_recon_loss
+
+            # # small background consistency loss to discourage absurd deltas outside ROI
+            # # choose small weight like 0.01
+            # bg_mask = ~reconstruction_roi_mask
+            # pred_bg = reconstructed_patches[bg_mask]
+            # gt_bg = next_images_patches[bg_mask]
+            # if pred_bg.numel() > 0:
+            #     bg_l1 = F.l1_loss(pred_bg, gt_bg)
+            #     losses['bg_consistency_loss'] = 0.01 * bg_l1
+            #     total_loss = total_loss + losses['bg_consistency_loss']
+            # if 'delta_all' in reconstruction_outputs:
+            #     # reconstruction_outputs['delta_all']: [B, num_patches, patch_dim]
+            #     delta_norm = reconstruction_outputs['delta_all'].abs().mean()
+            #     delta_loss = -0.1 * delta_norm  
+            #     losses['delta_magnitude_reward'] = delta_loss
+            #     total_loss = total_loss + delta_loss
+            reconstructed_patches = reconstruction_outputs['image_reconstruction']  # [B, num_patches, patch_dim]
+            next_images_patches = self._images_to_patches(next_images)  # [B, num_patches, patch_dim]
+
+            # === 全图重建 loss（原来 ROI 内的逻辑） ===
+            recon_mse = F.mse_loss(reconstructed_patches, next_images_patches)
+            recon_l1 = F.l1_loss(reconstructed_patches, next_images_patches)
+            image_recon_loss = recon_mse + 0.5 * recon_l1
             losses['image_reconstruction_loss'] = image_recon_loss
-            total_loss += image_recon_loss
+            total_loss = total_loss + image_recon_loss
+
+            # === delta magnitude reward 保留 ===
+            if 'delta_all' in reconstruction_outputs:
+                # reconstruction_outputs['delta_all']: [B, num_patches, patch_dim]
+                delta_norm = reconstruction_outputs['delta_all'].abs().mean()
+                delta_loss = -0.1 * delta_norm  
+                losses['delta_magnitude_reward'] = delta_loss
+                total_loss = total_loss + delta_loss
 
         def chamfer_distance(pred, gt):
             # pred/gt: [B, N, 3]
@@ -779,30 +1085,70 @@ class PrismaticVLM(VLM):
             loss = dist.min(dim=2)[0].mean() + dist.min(dim=1)[0].mean()
             return loss
 
+        def earth_movers_distance(pred, gt):
+            # Flatten batch dimension for pairwise distance computation
+            B, N, _ = pred.shape
+            pred_flat = pred.view(-1, 3)  # [B*N, 3]
+            gt_flat = gt.view(-1, 3)      # [B*N, 3]
+            
+            dist_matrix = torch.cdist(pred_flat, gt_flat)  # [B*N, B*N]
+            
+            dist_matrix = dist_matrix.view(B, N, B, N)
+            
+            emd_loss = 0.0
+            for i in range(B):
+                # Hungarian algorithm would be better but computationally expensive
+                # Here we use a simplified approximation
+                row_min = dist_matrix[i, :, i, :].min(dim=1)[0].mean()
+                col_min = dist_matrix[i, :, i, :].min(dim=0)[0].mean()
+                emd_loss += (row_min + col_min) / 2
+                
+            return emd_loss / B
+
         if self.recon_pointcloud and next_point_cloud is not None:
             if 'pointcloud_coord_reconstruction' in reconstruction_outputs:
                 # Extract coordinates from ground truth
                 assert next_point_cloud.shape[2] == 3, "Point cloud must have 3 dimensions (XYZ)"
 
                 pc_coord_pred = reconstruction_outputs['pointcloud_coord_reconstruction']
-                pc_coord_loss = chamfer_distance(pc_coord_pred, next_point_cloud) 
+                # pc_coord_loss = 0.1 * chamfer_distance(pc_coord_pred, next_point_cloud) 
+                pc_coord_loss = earth_movers_distance(pc_coord_pred, next_point_cloud) 
                 losses['pointcloud_coord_loss'] = pc_coord_loss
                 total_loss += pc_coord_loss
 
         losses['total_reconstruction_loss'] = total_loss
         return losses
     
+    
     def _images_to_patches(self, images):
-        """Convert images to patches for reconstruction loss computation"""
         B, C, H, W = images.shape
         patch_size = self.image_patch_size
         
-        # Reshape to patches
-        patches = images.unfold(2, patch_size, patch_size).unfold(3, patch_size, patch_size)
-        patches = patches.contiguous().view(B, C, -1, patch_size, patch_size)
-        patches = patches.permute(0, 2, 1, 3, 4).contiguous().view(B, -1, C * patch_size * patch_size)
+        assert C == 3, f"Expected 3 channels (RGB), got {C}"
+        assert H == W == 672, f"Expected 672x672 image, got {H}x{W}"
+        
+        patches = images.unfold(2, patch_size, patch_size).unfold(3, patch_size, patch_size) # [B, C=3, num_patches_h=16, num_patches_w=16, patch_h=42, patch_w=42]
+        patches = patches.contiguous().view(B, C, -1, patch_size, patch_size) # [B, C=3, num_patches=256, patch_h=42, patch_w=42]
+        patches = patches.permute(0, 2, 1, 3, 4).contiguous() # [B, num_patches=256, C=3, patch_h=42, patch_w=42]
+        patches = patches.view(B, -1, C * patch_size * patch_size) # [B, num_patches=256, C*patch_h*patch_w=5292]
         
         return patches
+    
+    def _patches_to_images(self, patches):
+        B, num_patches, patch_dim = patches.shape
+        patch_size = self.image_patch_size
+        
+        expected_patch_dim = 3 * patch_size * patch_size
+        assert patch_dim == expected_patch_dim, f"Expected patch_dim={expected_patch_dim}, got {patch_dim}"
+        assert num_patches == 256, f"Expected 256 patches, got {num_patches}"
+        
+        patches = patches.view(B, num_patches, 3, patch_size, patch_size) # [B, 256, 3, 42, 42]
+        num_patches_h = num_patches_w = int(num_patches ** 0.5)  # 16
+        patches = patches.view(B, num_patches_h, num_patches_w, 3, patch_size, patch_size)
+        images = patches.permute(0, 3, 1, 4, 2, 5).contiguous() # [B, 3, 16, 42, 16, 42]
+        images = images.view(B, 3, num_patches_h * patch_size, num_patches_w * patch_size) # [B, 3, 672, 672]
+        
+        return images
     
     def forward(
         self,
@@ -907,6 +1253,7 @@ class PrismaticVLM(VLM):
         pc_tokens_end_idx = pc_tokens_start_idx + N_pc
         img_tokens_start_idx = pc_tokens_end_idx
         img_tokens_end_idx = img_tokens_start_idx + N_img
+        current_image_features = projected_fused_embeddings[:, N_pc:, :]
 
         # Process proprio and diffusion embeddings
         proprio = self.proprio_embedder(proprio)
@@ -1028,18 +1375,23 @@ class PrismaticVLM(VLM):
         if self.use_reconstruction and self.training and output.hidden_states is not None:
             # Use the last layer hidden states for reconstruction
             llm_hidden_states = output.hidden_states[-1]  # [B, seq_len, hidden_dim]
-            
+            current_images_patches = self._images_to_patches(images[:, :3, :, :])
+            roi_mask_2d = self._create_roi_mask_from_indices(patch_indices)
             # Perform multimodal reconstruction
             reconstruction_outputs = self.reconstruct_modalities(
                 llm_hidden_states, 
-                batch_size=fused_embeddings.shape[0]
+                current_image_features=current_image_features,
+                current_images_patches=current_images_patches,
+                roi_mask_2d=roi_mask_2d,
+                batch_size=fused_embeddings.shape[0],
             )
             
             assert next_images is not None and next_point_cloud is not None, "Reconstruction requires ground truth images and point clouds!"
             reconstruction_losses = self.compute_reconstruction_losses(
                 reconstruction_outputs, 
                 next_images=next_images, 
-                next_point_cloud=next_point_cloud
+                next_point_cloud=next_point_cloud,
+                current_point_cloud=point_cloud,  # Pass current frame for movement analysis
             )
         
         if self.use_diff:
@@ -1057,7 +1409,21 @@ class PrismaticVLM(VLM):
             
             # # Return with reconstruction information
             if self.training:
-                visualize_reconstruction(reconstruction_outputs, next_images, next_point_cloud, "/media/liuzhuoyang/new_vla/Rec_Diff_beta/LLM_policy/vis/recon_vis_2donly")
+                visualize_reconstruction(reconstruction_outputs, 
+                    next_images, next_point_cloud, 
+                    "/media/liuzhuoyang/new_vla/Rec_Diff_beta/LLM_policy/vis/recon_vis_2dmaeall"
+                )
+                # self.visualize_reconstruction_img(
+                #     reconstruction_outputs, 
+                #     next_images,
+                #     "/media/liuzhuoyang/new_vla/Rec_Diff_beta/LLM_policy/vis/recon_vis_2donlyMAE"
+                # )
+                # self.visualize_incremental_reconstruction(
+                #     reconstruction_outputs, 
+                #     images,
+                #     next_images,
+                #     "/media/liuzhuoyang/new_vla/Rec_Diff_beta/LLM_policy/vis/recon_vis_2donlyMAE"
+                # )
                 return output, noise_pred, reconstruction_outputs, reconstruction_losses
             else:
                 return output, noise_pred
@@ -1067,6 +1433,155 @@ class PrismaticVLM(VLM):
             return output, reconstruction_outputs, reconstruction_losses
         else:
             return output # autoregressive
+        
+    def visualize_incremental_reconstruction(self, reconstruction_outputs, current_images, next_images, save_dir):
+        """可视化增量重建结果，帮助调试"""
+        import os
+        import matplotlib.pyplot as plt
+        os.makedirs(save_dir, exist_ok=True)
+        
+        if current_images is None or 'image_reconstruction' not in reconstruction_outputs:
+            return
+        
+        batch_size = current_images.shape[0]
+        for b in range(min(batch_size, 1)):  # 只可视化前4个样本
+            
+            # 转换图像格式用于显示
+            current_img = current_images[:, :3, :, :][b].cpu().float().numpy().transpose(1, 2, 0)  # CHW -> HWC
+            next_img = next_images[b].cpu().float().numpy().transpose(1, 2, 0) if next_images is not None else None
+            
+            # 重建图像
+            reconstructed_patches = reconstruction_outputs['image_reconstruction'][b:b+1]  # [1, N_patches, patch_dim]
+            reconstructed_img = self._patches_to_images(reconstructed_patches)[0]  # [C, H, W]
+            reconstructed_img = reconstructed_img.cpu().float().detach().numpy().transpose(1, 2, 0)  # CHW -> HWC
+            
+            if 'change_masks' in reconstruction_outputs:
+                change_mask = reconstruction_outputs['change_masks'][b].cpu().float().detach()  # [N_patches, 1]
+                change_mask_patches = change_mask.reshape(1, -1, 1).repeat_interleave(self.image_patch_size**2 * 3, dim=2)
+                change_mask_img = self._patches_to_images(change_mask_patches)[0, 0].cpu().float().numpy()
+            else:
+                change_mask_img = None
+            
+            # 创建对比图
+            fig, axes = plt.subplots(2, 3, figsize=(15, 10))
+            axes = axes.flatten()
+            
+            axes[0].imshow(current_img)
+            axes[0].set_title('Current Frame')
+            axes[0].axis('off')
+            
+            if next_img is not None:
+                axes[1].imshow(next_img)
+                axes[1].set_title('Next Frame (GT)')
+                axes[1].axis('off')
+            
+            axes[2].imshow(reconstructed_img)
+            axes[2].set_title('Reconstructed Next Frame')
+            axes[2].axis('off')
+            
+            if change_mask_img is not None:
+                axes[3].imshow(change_mask_img, cmap='hot')
+                axes[3].set_title('Change Mask')
+                axes[3].axis('off')
+            
+            # 差异图
+            if next_img is not None:
+                diff_img = np.abs(reconstructed_img - next_img)
+                axes[4].imshow(diff_img)
+                axes[4].set_title('Reconstruction Error')
+                axes[4].axis('off')
+            
+            # 当前帧和下一帧的差异
+            if next_img is not None:
+                real_diff = np.abs(next_img - current_img)
+                axes[5].imshow(real_diff)
+                axes[5].set_title('Real Change')
+                axes[5].axis('off')
+            
+            plt.tight_layout()
+            plt.savefig(f'{save_dir}/reconstruction_sample_{b}.png', dpi=150, bbox_inches='tight')
+            plt.close()
+        
+    def visualize_reconstruction_img(self, reconstruction_outputs, next_images, save_dir):
+        """8-subplot layout with Target/Recon RGB + their separate channels"""
+        import os
+        import matplotlib.pyplot as plt
+        from torchvision.utils import save_image
+        
+        os.makedirs(save_dir, exist_ok=True)
+        
+        if 'image_reconstruction' in reconstruction_outputs and next_images is not None:
+            # Convert patches to full images
+            patch_pred = reconstruction_outputs['image_reconstruction']  # [B, num_patches, patch_dim]
+            reconstructed_images = self._patches_to_images(patch_pred)  # [B, 3, 672, 672]
+
+            # Clamp values to [0,1] range
+            # reconstructed_images = torch.clamp(reconstructed_images, 0, 1)
+            # next_images = torch.clamp(next_images, 0, 1)
+            
+            batch_size = min(1, reconstructed_images.shape[0])  # Only visualize first sample
+            
+            for i in range(batch_size):
+                # Create 2x4 subplots
+                fig, axes = plt.subplots(2, 4, figsize=(20, 10))
+                fig.suptitle('Image Reconstruction Comparison', fontsize=16)
+
+                # --- Row 1: Target ---
+                # Target RGB
+                target_img = next_images[i].cpu().float().detach().permute(1, 2, 0).numpy()
+                axes[0, 0].imshow(target_img)
+                axes[0, 0].set_title('Target (RGB)')
+                axes[0, 0].axis('off')
+
+                # Target R/G/B Channels
+                target_tensor = next_images[i].cpu().float().detach()
+                axes[0, 1].imshow(target_tensor[0], cmap='Reds', vmin=0, vmax=1)
+                axes[0, 1].set_title('Target (Red)')
+                axes[0, 1].axis('off')
+                
+                axes[0, 2].imshow(target_tensor[1], cmap='Greens', vmin=0, vmax=1)
+                axes[0, 2].set_title('Target (Green)')
+                axes[0, 2].axis('off')
+                
+                axes[0, 3].imshow(target_tensor[2], cmap='Blues', vmin=0, vmax=1)
+                axes[0, 3].set_title('Target (Blue)')
+                axes[0, 3].axis('off')
+
+                # --- Row 2: Reconstructed ---
+                # Reconstructed RGB
+                recon_img = reconstructed_images[i].cpu().float().detach().permute(1, 2, 0).numpy()
+                axes[1, 0].imshow(recon_img)
+                axes[1, 0].set_title('Recon (RGB)')
+                axes[1, 0].axis('off')
+
+                # Reconstructed R/G/B Channels
+                recon_tensor = reconstructed_images[i].cpu().float().detach()
+                axes[1, 1].imshow(recon_tensor[0], cmap='Reds', vmin=0, vmax=1)
+                axes[1, 1].set_title('Recon (Red)')
+                axes[1, 1].axis('off')
+                
+                axes[1, 2].imshow(recon_tensor[1], cmap='Greens', vmin=0, vmax=1)
+                axes[1, 2].set_title('Recon (Green)')
+                axes[1, 2].axis('off')
+                
+                axes[1, 3].imshow(recon_tensor[2], cmap='Blues', vmin=0, vmax=1)
+                axes[1, 3].set_title('Recon (Blue)')
+                axes[1, 3].axis('off')
+
+                # Save figure
+                plt.tight_layout()
+                plt.savefig(
+                    os.path.join(save_dir, f'reconstruction_8subplots_{i}.png'), 
+                    dpi=150, 
+                    bbox_inches='tight'
+                )
+                plt.close()
+
+                # Optional: Save individual images
+                save_image(next_images[i], os.path.join(save_dir, f'target_{i}.png'))
+                save_image(reconstructed_images[i], os.path.join(save_dir, f'reconstructed_{i}.png'))
+                
+            print(f"Visualization saved to {save_dir}")
         
         
     def prepare_inputs_for_generation(
