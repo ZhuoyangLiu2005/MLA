@@ -259,7 +259,6 @@ class TrainingStrategy(ABC):
         use_diff: bool = False,
         use_reconstruction: bool = False,
         repeated_diffusion_steps = 4,
-        ar_diff_loss: bool = False,
         enable_latent_supervision: bool = False,
         latent_loss_weight: float = 0.1,
     ) -> None:

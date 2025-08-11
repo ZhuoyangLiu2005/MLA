@@ -98,12 +98,13 @@ class TrainConfig:
     class_dropout_prob: float = 0.
     action_tokenizer_exist: bool = False
     use_diff: bool = False
-    ar_diff_loss: bool = False
-    use_reconstruction: bool = False
+    
+    # reconstruction
+    recon_image: bool = False
+    use_roi: bool = False
+    recon_pointcloud: bool = False
     
     llm_vision_layers: int = 8
-    llm_action_layers: int = 8
-    llm_action_layers_stride: int = 2
 
     def __post_init__(self) -> None:
         """Lift optimization parameters from `self.vla` for ease of use =>> validate on `expected_world_size`"""
@@ -210,8 +211,6 @@ def train(cfg: TrainConfig) -> None:
                         use_diff=cfg.use_diff,
                         use_reconstruction=cfg.use_reconstruction,
                         llm_vision_layers=cfg.llm_vision_layers,
-                        llm_action_layers=cfg.llm_action_layers,
-                        llm_action_layers_stride=cfg.llm_action_layers_stride
                     )
     elif cfg.pretrained_checkpoint is not None and 'openvla' in cfg.pretrained_checkpoint:
         vlm = load_openvla(cfg.pretrained_checkpoint, 
@@ -231,8 +230,6 @@ def train(cfg: TrainConfig) -> None:
                     use_diff = cfg.use_diff,
                     use_reconstruction = cfg.use_reconstruction,
                     llm_vision_layers=cfg.llm_vision_layers,
-                    llm_action_layers=cfg.llm_action_layers,
-                    llm_action_layers_stride=cfg.llm_action_layers_stride
                 )
         del vlm
 
@@ -242,8 +239,6 @@ def train(cfg: TrainConfig) -> None:
                     use_diff=cfg.use_diff,
                     use_reconstruction=cfg.use_reconstruction,
                     llm_vision_layers=cfg.llm_vision_layers,
-                    llm_action_layers=cfg.llm_action_layers,
-                    llm_action_layers_stride=cfg.llm_action_layers_stride
                 )
         overwatch.info("Creating VLA from Base VLM")
         if cfg.use_ema:
@@ -258,8 +253,6 @@ def train(cfg: TrainConfig) -> None:
                     use_diff = cfg.use_diff,
                     use_reconstruction = cfg.use_reconstruction,
                     llm_vision_layers=cfg.llm_vision_layers,
-                    llm_action_layers=cfg.llm_action_layers,
-                    llm_action_layers_stride=cfg.llm_action_layers_stride
                 )
         del vlm
 
@@ -375,7 +368,6 @@ def train(cfg: TrainConfig) -> None:
         use_diff=cfg.use_diff,
         use_reconstruction=cfg.use_reconstruction,
         repeated_diffusion_steps = cfg.repeated_diffusion_steps,
-        ar_diff_loss = cfg.ar_diff_loss,
     )
 
     # Finalize

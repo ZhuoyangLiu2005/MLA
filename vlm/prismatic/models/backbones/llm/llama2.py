@@ -61,8 +61,6 @@ class LLaMa2LLMBackbone(HFCausalLLMBackbone):
         inference_mode: bool = False,
         use_flash_attention_2: bool = True,
         llm_vision_layers: int = 8,
-        llm_action_layers: int = 8,
-        llm_action_layers_stride: int = 2,
     ) -> None:
         super().__init__(
             llm_backbone_id,

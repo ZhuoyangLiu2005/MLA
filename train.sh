@@ -1,7 +1,6 @@
-# 每次开始训练记得检查视角！！！
 
 cd /media/liuzhuoyang/new_vla/Rec_Diff_beta/LLM_policy
-export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
+export CUDA_VISIBLE_DEVICES=4,5,6,7
 export HF_HOME=/media/huggingface
 
 export PYTHONPATH=/media/liuzhuoyang/new_vla/Rec_Diff_beta/LLM_policy:$PYTHONPATH
@@ -21,18 +20,20 @@ FREEZE_VISON=true
 FREEZE_LLM=false
 ACTION_TOKENIZER_EXIST=false
 USE_DIFF=true
-USE_REC=true
-AR_DIFF_LOSS=false
 REPEATED_DIFFUSION_STEPS=4
 CLASS_DROPOUT_PROB=0.0
 PRETRAIN=Diff_300
 LLM_VISION_LAYERS=8
-LLM_ACTION_LAYERS=8
 
-SETTING=Pretrain${PRETRAIN}_FreezeVis${FREEZE_VISON}_Window${FUTURE_ACTION_STEPS}_Diff${USE_DIFF}_Rec${USE_REC}only2dmaeall_Contrastive_Vislayer${LLM_VISION_LAYERS}_1024_0403_0810
+RECON_IMG=true
+USE_ROI=true
+RECON_PC=true
+
+
+SETTING=tttmmmppp_Pretrain${PRETRAIN}_FreezeVis${FREEZE_VISON}_Window${FUTURE_ACTION_STEPS}_Diff${USE_DIFF}_Rec${USE_REC}only2dmaeall_Contrastive_Vislayer${LLM_VISION_LAYERS}_1024_0403_0810
 
 TASK=4tasks_selected_keyframe_nextpc_0806
-NUM_GPUS=8
+NUM_GPUS=4
 NODES=1
 BATCH_SIZE=8
 EPOCHS=300
@@ -58,7 +59,7 @@ torchrun --standalone --nnodes ${NODES} --nproc-per-node ${NUM_GPUS} scripts/tra
   --image_aug false \
   --wandb_project one_model_vla_sft \
   --wandb_entity liumail2023-peking-university \
-  --save_interval 100 \
+  --save_interval 1000 \
   --action_dim 7 \
   --repeated_diffusion_steps ${REPEATED_DIFFUSION_STEPS} \
   --action_tokenizer_exist ${ACTION_TOKENIZER_EXIST} \
@@ -66,7 +67,6 @@ torchrun --standalone --nnodes ${NODES} --nproc-per-node ${NUM_GPUS} scripts/tra
   --class_dropout_prob ${CLASS_DROPOUT_PROB} \
   --use_diff ${USE_DIFF} \
   --use_reconstruction ${USE_REC} \
-  --ar_diff_loss ${AR_DIFF_LOSS} \
   --is_resume False \
   --pretrained_checkpoint "/media/liuzhuoyang/new_vla/Diff_VLA_beta/exp/exp_4tasks_selected_keyframe_pointcloud_1024_0403_Pretrain2D_0623_E2_FreezeVistrue_Window0_Difftrue_Contrastive_Vislayer8_1024_0403_0801/checkpoints/step-007803-epoch-300-loss=1.2505.pt"
   # --pretrained_checkpoint "/media/huggingface/hub/models--openvla--openvla-7b/snapshots/31f090d05236101ebfc381b61c674dd4746d4ce0"
