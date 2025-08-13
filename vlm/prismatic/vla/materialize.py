@@ -34,7 +34,8 @@ def get_vla_dataset_and_collator(
     future_action_window_size: int = 0,
     past_action_window_size: int = 1,         # Concatenated `past_action_window_size-1' actions and the current action for the input
     load_all_data_for_training: bool = True,  # Load all data for training, or only a subset
-    action_tokenizer_exist: bool = False
+    action_tokenizer_exist: bool = False,
+    use_pointcloud: bool = False,
 ) -> Tuple[Dataset, ActionTokenizer, PaddedCollatorForActionPrediction]:
     """Initialize RLDS Dataset (wraps TFDS), ActionTokenizer, and initialize transform/collation functions."""
     if not action_tokenizer_exist:
@@ -43,7 +44,12 @@ def get_vla_dataset_and_collator(
         action_tokenizer = ActionTokenizer(tokenizer)
     # action_tokenizer = ActionTokenizer(tokenizer)
     batch_transform = RLDSBatchTransform(
-        action_tokenizer, tokenizer,image_transform, prompt_builder_fn, predict_stop_token=predict_stop_token
+        action_tokenizer, 
+        tokenizer,
+        image_transform, 
+        prompt_builder_fn,
+        predict_stop_token=predict_stop_token,
+        use_pointcloud=use_pointcloud,
     )
     collator = PaddedCollatorForActionPrediction(
         tokenizer.model_max_length, tokenizer.pad_token_id, padding_side=padding_side
@@ -62,6 +68,7 @@ def get_vla_dataset_and_collator(
         past_action_window_size=past_action_window_size,
         image_aug=image_aug,
         load_all_data_for_training=load_all_data_for_training,
+        use_pointcloud=use_pointcloud,
     )
 
     return dataset, action_tokenizer, collator

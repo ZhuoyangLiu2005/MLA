@@ -89,7 +89,7 @@ class TrainConfig:
     #trackers: Tuple[str, ...] = ("jsonl",)                         # Trackers to initialize (if W&B, add config!)
     wandb_project: str = ""                                         # Name of W&B project to log to (use default!)
     wandb_entity: str = ""                                          # Name of entity to log under
-    repeated_diffusion_steps: int = 8                               # Repeated steps for training action model (a diffusion model)
+    repeated_diffusion_steps: int = 4                               # Repeated steps for training action model (a diffusion model)
     load_all_data_for_training: bool = True                         # Load all training data 
     future_action_window_size: int = 15                             # Action chunking, predicting future actions + current action
     past_action_window_size: int = 0                                # Action history window size, not used now, set to be 0 
@@ -98,13 +98,17 @@ class TrainConfig:
     class_dropout_prob: float = 0.
     action_tokenizer_exist: bool = False
     use_diff: bool = False
+
+    # contrastive
+    use_pointcloud: bool = False
+    llm_vision_layers: int = 8
     
     # reconstruction
+    use_reconstruction: bool = False
     recon_image: bool = False
     use_roi: bool = False
     recon_pointcloud: bool = False
     
-    llm_vision_layers: int = 8
 
     def __post_init__(self) -> None:
         """Lift optimization parameters from `self.vla` for ease of use =>> validate on `expected_world_size`"""
@@ -209,14 +213,22 @@ def train(cfg: TrainConfig) -> None:
                         use_ema=cfg.use_ema,
                         class_dropout_prob=cfg.class_dropout_prob,
                         use_diff=cfg.use_diff,
+                        use_pointcloud=cfg.use_pointcloud,
                         use_reconstruction=cfg.use_reconstruction,
+                        recon_image=cfg.recon_image,
+                        recon_pointcloud=cfg.recon_pointcloud,
                         llm_vision_layers=cfg.llm_vision_layers,
                     )
     elif cfg.pretrained_checkpoint is not None and 'openvla' in cfg.pretrained_checkpoint:
         vlm = load_openvla(cfg.pretrained_checkpoint, 
                            hf_token=hf_token, 
                            load_for_training=True, 
-                           use_diff=cfg.use_diff)
+                           use_diff=cfg.use_diff,
+                           use_pointcloud=cfg.use_pointcloud,
+                           use_reconstruction=cfg.use_reconstruction,
+                           recon_image=cfg.recon_image,
+                           recon_pointcloud=cfg.recon_pointcloud,
+                        )
         overwatch.info("Creating VLA from Base VLM")
         if cfg.use_ema:
             overwatch.info("Creating EMA for Diffusion")
@@ -227,19 +239,27 @@ def train(cfg: TrainConfig) -> None:
                     future_action_window_size=cfg.future_action_window_size,
                     past_action_window_size=cfg.past_action_window_size,
                     use_ema=cfg.use_ema,
-                    use_diff = cfg.use_diff,
+                    use_diff=cfg.use_diff,
+                    use_pointcloud=cfg.use_pointcloud,
                     use_reconstruction = cfg.use_reconstruction,
+                    recon_image=cfg.recon_image,
+                    recon_pointcloud=cfg.recon_pointcloud,
                     llm_vision_layers=cfg.llm_vision_layers,
                 )
         del vlm
 
     else:
         vlm = load(
-                    cfg.vla.base_vlm, hf_token=hf_token, load_for_training=True,
-                    use_diff=cfg.use_diff,
-                    use_reconstruction=cfg.use_reconstruction,
-                    llm_vision_layers=cfg.llm_vision_layers,
-                )
+                cfg.vla.base_vlm, 
+                hf_token=hf_token, 
+                load_for_training=True,
+                use_diff=cfg.use_diff,
+                use_pointcloud=cfg.use_pointcloud,
+                use_reconstruction=cfg.use_reconstruction,
+                recon_image=cfg.recon_image,
+                recon_pointcloud=cfg.recon_pointcloud,
+                llm_vision_layers=cfg.llm_vision_layers,
+            )
         overwatch.info("Creating VLA from Base VLM")
         if cfg.use_ema:
             overwatch.info("Creating EMA for Diffusion")
@@ -250,8 +270,11 @@ def train(cfg: TrainConfig) -> None:
                     future_action_window_size=cfg.future_action_window_size,
                     past_action_window_size=cfg.past_action_window_size,
                     use_ema=cfg.use_ema,
-                    use_diff = cfg.use_diff,
+                    use_diff=cfg.use_diff,
+                    use_pointcloud=cfg.use_pointcloud,
                     use_reconstruction = cfg.use_reconstruction,
+                    recon_image=cfg.recon_image,
+                    recon_pointcloud=cfg.recon_pointcloud,
                     llm_vision_layers=cfg.llm_vision_layers,
                 )
         del vlm
@@ -312,7 +335,8 @@ def train(cfg: TrainConfig) -> None:
         load_all_data_for_training=cfg.load_all_data_for_training,
         future_action_window_size=cfg.future_action_window_size,
         past_action_window_size=cfg.past_action_window_size,
-        action_tokenizer_exist=cfg.action_tokenizer_exist
+        action_tokenizer_exist=cfg.action_tokenizer_exist,
+        use_pointcloud=cfg.use_pointcloud,
     )
 
     # Save dataset statistics for de-normalization at inference time
@@ -366,7 +390,10 @@ def train(cfg: TrainConfig) -> None:
         metrics,
         save_interval=cfg.save_interval,
         use_diff=cfg.use_diff,
+        use_pointcloud=cfg.use_pointcloud,
         use_reconstruction=cfg.use_reconstruction,
+        recon_image=cfg.recon_image,
+        recon_pointcloud=cfg.recon_pointcloud,
         repeated_diffusion_steps = cfg.repeated_diffusion_steps,
     )
 

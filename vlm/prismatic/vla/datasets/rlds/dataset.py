@@ -54,6 +54,7 @@ def make_dataset_from_rlds(
     num_parallel_reads: int = tf.data.AUTOTUNE,
     num_parallel_calls: int = tf.data.AUTOTUNE,
     load_all_data_for_training: bool = True,
+    use_pointcloud: bool = False,
 ) -> Tuple[dl.DLataset, dict]:
     """
     This function is responsible for loading a specific RLDS dataset from storage and getting it into a standardized
@@ -171,8 +172,9 @@ def make_dataset_from_rlds(
         # add timestep info
         new_obs["timestep"] = tf.range(traj_len)
         new_obs["proprio"] = tf.cast(traj["observation"]["proprio"], tf.float32)
-        new_obs["point_cloud"] = tf.cast(traj["observation"]["point_cloud"], tf.float32)
-        new_obs["next_point_cloud"] = tf.cast(traj["observation"]["next_point_cloud"], tf.float32)
+        if use_pointcloud:
+            new_obs["point_cloud"] = tf.cast(traj["observation"]["point_cloud"], tf.float32)
+            new_obs["next_point_cloud"] = tf.cast(traj["observation"]["next_pointcloud"], tf.float32)
         # new_obs["next_front_image"] = tf.cast(traj["observation"]["next_front_image"], tf.float32)
         
 
@@ -484,6 +486,7 @@ def make_interleaved_dataset(
     traj_transform_threads: Optional[int] = None,
     traj_read_threads: Optional[int] = None,
     load_all_data_for_training: bool = True,
+    use_pointcloud: bool = False,
 ) -> dl.DLataset:
     """
     Creates an interleaved dataset from list of dataset configs (kwargs). Returns a dataset of batched frames.
@@ -540,7 +543,8 @@ def make_interleaved_dataset(
 
     # Effective Dataset Length = Number of samples until each dataset has completed at least one epoch
     #   =>> Note :: Only counting the "primary" datasets (i.e., datasets with sample_weight == 1.0)
-    dataset_len = int((np.array(dataset_sizes) / sample_weights)[primary_dataset_indices].max())
+    dataset_len = int((np.array(dataset_sizes) / sample_weights)[primary_dataset_indices].max()) // 5
+    # dataset_len = 100000 # 36346806
 
     # Allocate Threads based on Weights
     threads_per_dataset = allocate_threads(traj_transform_threads, sample_weights)
@@ -569,6 +573,7 @@ def make_interleaved_dataset(
             num_parallel_reads=reads,
             dataset_statistics=all_dataset_statistics[dataset_kwargs["name"]],
             load_all_data_for_training=load_all_data_for_training,
+            use_pointcloud=use_pointcloud,
         )
         dataset = apply_trajectory_transforms(
             dataset.repeat(),

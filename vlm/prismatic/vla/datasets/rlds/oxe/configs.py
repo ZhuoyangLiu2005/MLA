@@ -67,9 +67,9 @@ OXE_DATASET_CONFIGS = {
         "action_encoding": ActionEncoding.EEF_POS,
     },
     "rtx_dataset": {
-        "image_obs_keys": {"primary": "image", "secondary": None, "wrist": None},
+        "image_obs_keys": {"primary": "image", "next_primary": "next_image", "secondary": None, "wrist": None},
         "depth_obs_keys": {"primary": None, "secondary": None, "wrist": None},
-        "state_obs_keys": ["base_pose_tool_reached", "gripper_closed"],
+        "state_obs_keys": ["proprio"],
         "state_encoding": StateEncoding.POS_QUAT,
         "action_encoding": ActionEncoding.EEF_POS,
     },

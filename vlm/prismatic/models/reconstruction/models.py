@@ -2,7 +2,67 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from typing import Dict, Optional, Tuple
+from timm.models.layers import DropPath, trunc_normal_
 from .utils import dilate_mask
+
+
+class FPSSampling(nn.Module):
+    
+    def __init__(self, num_group: int):
+        super().__init__()
+        self.num_group = num_group
+    
+    def fps_sampling(self, xyz, num_samples):
+        B, N, _ = xyz.shape
+        device = xyz.device
+
+        centroids = torch.zeros(B, num_samples, dtype=torch.long, device=device)
+        distance = torch.ones(B, N, device=device) * 1e10
+        farthest = torch.randint(0, N, (B,), dtype=torch.long, device=device)
+        
+        for i in range(num_samples):
+            centroids[:, i] = farthest
+            centroid = xyz[torch.arange(B), farthest, :].view(B, 1, 3)
+            dist = torch.sum((xyz - centroid) ** 2, -1)
+            mask = dist < distance
+            distance[mask] = dist[mask]
+            farthest = torch.max(distance, -1)[1]
+
+        sampled_points = xyz[torch.arange(B).unsqueeze(1), centroids]
+        return sampled_points
+    
+    def forward(self, xyz):
+        centers = self.fps_sampling(xyz, self.num_group)
+        return centers
+
+
+class TransformerBlock(nn.Module):
+    def __init__(self, dim, num_heads, mlp_ratio=4., qkv_bias=False, drop=0., attn_drop=0.,
+                 drop_path=0., act_layer=nn.GELU, norm_layer=nn.LayerNorm):
+        super().__init__()
+        self.norm1 = norm_layer(dim)
+        self.attn = nn.MultiheadAttention(dim, num_heads, dropout=attn_drop, batch_first=True)
+        self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
+        self.norm2 = norm_layer(dim)
+        mlp_hidden_dim = int(dim * mlp_ratio)
+        self.mlp = nn.Sequential(
+            nn.Linear(dim, mlp_hidden_dim),
+            act_layer(),
+            nn.Dropout(drop),
+            nn.Linear(mlp_hidden_dim, dim),
+            nn.Dropout(drop)
+        )
+
+    def forward(self, x, pos=None):
+        if pos is not None:
+            x_norm = self.norm1(x + pos)
+        else:
+            x_norm = self.norm1(x)
+        
+        attn_out, _ = self.attn(x_norm, x_norm, x_norm)
+        x = x + self.drop_path(attn_out)
+        x = x + self.drop_path(self.mlp(self.norm2(x)))
+        return x
 
 
 class ImageReconstructionModule(nn.Module):
@@ -224,101 +284,106 @@ class ImageReconstructionModule(nn.Module):
         
         # Reshape back to patch format
         return blended.view(B, num_patches, -1)
-    
-    
-    
-    
+        
+
 class PointCloudReconstructionModule(nn.Module):
-    def __init__(
-        self,
-        token_size: int = 4096,
-        num_recon_queries: int = 64,
-        decoder_layers: int = 3,
-        decoder_heads: int = 8,
-        pointcloud_dim: int = 768,
-        num_patches: int = 1024,
-    ):
+    
+    def __init__(self, 
+                 prismatic_hidden_dim: int = 4096,
+                 trans_dim: int = 1024,
+                 decoder_depth: int = 4,
+                 decoder_num_heads: int = 8,
+                 group_size: int = 32,
+                 num_groups: int = 128,
+                 loss: str = 'cdl2',
+                 use_geometric_prior: bool = True):
         super().__init__()
         
-        # Configuration
-        self.token_size = token_size
-        self.num_recon_queries = num_recon_queries
-        self.pointcloud_dim = pointcloud_dim
-        self.num_patches = num_patches
+        self.prismatic_hidden_dim = prismatic_hidden_dim
+        self.trans_dim = trans_dim
+        self.decoder_depth = decoder_depth
+        self.decoder_num_heads = decoder_num_heads
+        self.group_size = group_size
+        self.num_groups = num_groups
+        self.loss = loss
+        self.use_geometric_prior = use_geometric_prior
         
-        # Learnable parameters
-        self.pointcloud_recon_queries = nn.Parameter(
-            torch.zeros(1, num_recon_queries, token_size)
-        )
-        self.pointcloud_mask_tokens = nn.Parameter(
-            torch.zeros(1, num_patches, pointcloud_dim)
-        )
-        self.pointcloud_recon_pos_embed = nn.Parameter(
-            torch.zeros(1, num_recon_queries + num_patches, pointcloud_dim)
-        )
+        self.feature_projector = nn.Linear(prismatic_hidden_dim, trans_dim)
         
-        # Transformer decoder for point cloud reconstruction
-        decoder_layer = nn.TransformerDecoderLayer(
-            d_model=token_size,
-            nhead=decoder_heads,
-            dim_feedforward=token_size * 4,
-            dropout=0.1,
-            activation='gelu',
-            batch_first=True
-        )
-        self.pointcloud_recon_decoder = nn.TransformerDecoder(decoder_layer, decoder_layers)
+        self.seq_to_patch = nn.Linear(trans_dim, num_groups * trans_dim)
+
+        if use_geometric_prior:
+            self.fps_sampler = FPSSampling(num_groups)
         
-        # Projection and prediction layers
-        self.pointcloud_recon_projector = nn.Linear(token_size, pointcloud_dim)
-        self.pointcloud_coord_predictor = nn.Sequential(
-            nn.LayerNorm(pointcloud_dim),
-            nn.Linear(pointcloud_dim, 3)  # XYZ coordinates
-        )
+        self.pos_embed = nn.Parameter(torch.zeros(1, num_groups, trans_dim))
+        trunc_normal_(self.pos_embed, std=.02)
         
-        self._initialize_weights()
+        self.decoder_blocks = nn.ModuleList([
+            TransformerBlock(
+                dim=trans_dim,
+                num_heads=decoder_num_heads,
+                mlp_ratio=4.0,
+                qkv_bias=True,
+                drop=0.1,
+                attn_drop=0.1,
+                drop_path=0.1
+            ) for _ in range(decoder_depth)
+        ])
+        
+        self.future_predictor = nn.Sequential(
+            nn.Conv1d(trans_dim, trans_dim, 1),
+            nn.BatchNorm1d(trans_dim),
+            nn.ReLU(inplace=True),
+            nn.Conv1d(trans_dim, 3 * group_size, 1)
+        )
     
-    def _initialize_weights(self):
-        """Initialize all learnable parameters"""
-        nn.init.normal_(self.pointcloud_recon_queries, std=0.02)
-        nn.init.normal_(self.pointcloud_mask_tokens, std=0.02)
-        self._init_pos_embed(self.pointcloud_recon_pos_embed)
+        self.apply(self._init_weights)
     
-    def _init_pos_embed(self, pos_embed):
-        """Initialize position embeddings"""
-        nn.init.normal_(pos_embed, std=0.02)
+    def _init_weights(self, m):
+        if isinstance(m, nn.Linear):
+            trunc_normal_(m.weight, std=.02)
+            if isinstance(m, nn.Linear) and m.bias is not None:
+                nn.init.constant_(m.bias, 0)
+        elif isinstance(m, nn.LayerNorm):
+            nn.init.constant_(m.bias, 0)
+            nn.init.constant_(m.weight, 1.0)
     
-    def forward(
-        self,
-        llm_hidden_states: torch.Tensor,
-    ) -> Dict[str, torch.Tensor]:
-        batch_size = llm_hidden_states.shape[0]
-        
-        # Extract point cloud reconstruction features
-        pc_queries = self.pointcloud_recon_queries.expand(batch_size, -1, -1)
-        pc_recon_features = self.pointcloud_recon_decoder(
-            tgt=pc_queries,
-            memory=llm_hidden_states
-        )
-        
-        # Project to point cloud feature space
-        pc_recon_proj = self.pointcloud_recon_projector(pc_recon_features)
-        
-        # Combine with mask tokens and add positional embeddings
-        pc_mask_tokens = self.pointcloud_mask_tokens.expand(batch_size, -1, -1)
-        pc_decoder_input = torch.cat([pc_recon_proj, pc_mask_tokens], dim=1)
-        pc_decoder_input = pc_decoder_input + self.pointcloud_recon_pos_embed
-        
-        # Extract features for coordinate prediction
-        pc_mask_features = pc_decoder_input[:, self.num_recon_queries:, :]
-        
-        # Predict 3D coordinates
-        pc_coord_pred = self.pointcloud_coord_predictor(pc_mask_features)
+    def forward(self,
+                last_hidden: torch.Tensor,
+                current_pointcloud: Optional[torch.Tensor] = None,
+                vis: bool = False) -> torch.Tensor:
+        B, seq_len, hidden_dim = last_hidden.shape
+
+        projected_features = self.feature_projector(last_hidden)  # (B, seq_len, trans_dim)
+
+        aggregated_features = projected_features.mean(dim=1)  # (B, trans_dim)
+        patch_features = self.seq_to_patch(aggregated_features)  # (B, num_groups * trans_dim)
+        patch_features = patch_features.reshape(B, self.num_groups, self.trans_dim)  # (B, G, trans_dim)
+
+        patch_centers = None
+        if self.use_geometric_prior and current_pointcloud is not None:
+            patch_centers = self.fps_sampler(current_pointcloud)  # (B, G, 3)
+
+        pos_features = self.pos_embed.expand(B, -1, -1)  # (B, G, trans_dim)
+
+        future_features = patch_features
+        for block in self.decoder_blocks:
+            future_features = block(future_features, pos_features)  # (B, G, trans_dim)
+
+        future_deltas = self.future_predictor(future_features.transpose(1, 2))  # (B, 3*M, G)
+        future_deltas = future_deltas.transpose(1, 2).reshape(B * self.num_groups, self.group_size, 3)  # (B*G, M, 3)
+
+        if patch_centers is not None:
+            centers_expanded = patch_centers.reshape(B * self.num_groups, 1, 3).expand(-1, self.group_size, -1)
+            pred_future_points = future_deltas + centers_expanded  # (B*G, M, 3)
+        else:
+            pred_future_points = future_deltas  # (B*G, M, 3)
+
+        pred_future_pointcloud = pred_future_points.reshape(B, self.num_groups * self.group_size, 3)  # (B, G*M, 3)
         
         return {
-            'pointcloud_coord_reconstruction': pc_coord_pred,
-            'pointcloud_features': pc_recon_features,
+            'pointcloud_coord_reconstruction': pred_future_pointcloud,
         }
-        
 
 
 class MultimodalReconstructionManager(nn.Module):
@@ -335,11 +400,11 @@ class MultimodalReconstructionManager(nn.Module):
         roi_dilation_kernel_size: int = 3,
         # Point cloud reconstruction parameters
         use_pointcloud_reconstruction: bool = False,
-        num_pointcloud_recon_queries: int = 64,
-        pointcloud_decoder_layers: int = 3,
+        pointcloud_trans_dim: int = 1024,
+        pointcloud_decoder_layers: int = 4,
         pointcloud_decoder_heads: int = 8,
-        pointcloud_dim: int = 768,
-        pointcloud_num_patches: int = 1024,
+        pointcloud_group_size: int = 16,
+        pointcloud_num_groups: int = 64,
     ):
         super().__init__()
         
@@ -360,12 +425,14 @@ class MultimodalReconstructionManager(nn.Module):
         
         if self.use_pointcloud_reconstruction:
             self.pointcloud_recon_module = PointCloudReconstructionModule(
-                token_size=token_size,
-                num_recon_queries=num_pointcloud_recon_queries,
-                decoder_layers=pointcloud_decoder_layers,
-                decoder_heads=pointcloud_decoder_heads,
-                pointcloud_dim=pointcloud_dim,
-                num_patches=pointcloud_num_patches,
+                prismatic_hidden_dim=token_size,
+                trans_dim=pointcloud_trans_dim,
+                decoder_depth=pointcloud_decoder_layers,
+                decoder_num_heads=pointcloud_decoder_heads,
+                group_size=pointcloud_group_size,
+                num_groups=pointcloud_num_groups,
+                loss='cdl2',
+                use_geometric_prior=True
             )
     
     def forward(
@@ -373,11 +440,12 @@ class MultimodalReconstructionManager(nn.Module):
         llm_hidden_states: torch.Tensor,
         current_image_features: Optional[torch.Tensor] = None,
         current_images_patches: Optional[torch.Tensor] = None,
+        current_point_cloud: Optional[torch.Tensor] = None,
         roi_mask_2d: Optional[torch.Tensor] = None,
     ) -> Dict[str, torch.Tensor]:
         reconstruction_outputs = {}
         
-        if self.use_image_reconstruction and current_image_features is not None:
+        if self.use_image_reconstruction:
             image_outputs = self.image_recon_module(
                 llm_hidden_states=llm_hidden_states,
                 current_image_features=current_image_features,
@@ -388,7 +456,8 @@ class MultimodalReconstructionManager(nn.Module):
         
         if self.use_pointcloud_reconstruction:
             pointcloud_outputs = self.pointcloud_recon_module(
-                llm_hidden_states=llm_hidden_states,
+                last_hidden=llm_hidden_states,
+                current_pointcloud=current_point_cloud,
             )
             reconstruction_outputs.update(pointcloud_outputs)
         

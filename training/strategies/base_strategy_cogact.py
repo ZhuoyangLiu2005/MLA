@@ -257,10 +257,11 @@ class TrainingStrategy(ABC):
         save_interval: int = 2500,
         save_full_model: bool = True,
         use_diff: bool = False,
+        use_pointcloud: bool = False,
         use_reconstruction: bool = False,
+        recon_image: bool = False,
+        recon_pointcloud: bool = False,
         repeated_diffusion_steps = 4,
-        enable_latent_supervision: bool = False,
-        latent_loss_weight: float = 0.1,
     ) -> None:
         """Run the VLA training loop for the given `dataset` and `collator`; log losses, action metrics to `metrics`."""
         assert isinstance(vla_dataset, IterableDataset), "VLA training expects an IterableDataset!"
@@ -305,10 +306,10 @@ class TrainingStrategy(ABC):
                             attention_mask=batch["attention_mask"],
                             labels=batch["labels"],
                             actions=batch["actions"],
-                            images = batch["images"],
-                            next_images = batch["next_images"],
-                            point_cloud = batch["point_cloud"],
-                            next_point_cloud = batch["next_point_cloud"],
+                            images=batch["images"],
+                            next_images=batch["next_images"] if (use_reconstruction and recon_image) else None,
+                            point_cloud=batch["point_cloud"] if use_pointcloud else None,
+                            next_point_cloud=batch["next_point_cloud"] if (use_pointcloud and use_reconstruction and recon_pointcloud) else None,
                             proprio=batch["proprio"],
                             action_masks=batch["action_masks"],
                             output_hidden_states = True,
@@ -318,13 +319,15 @@ class TrainingStrategy(ABC):
                         )
                         ar = torch.tensor(0, dtype=torch.float32) 
                         metrics.commit(ar_loss=ar,diff_loss=loss) 
-                        loss += output.contrastive_loss* 0.01 # add the contrastive loss to the total loss
+                        # loss += output.contrastive_loss # add the contrastive loss to the total loss
                     else: 
                         output = self.vlm(
                             input_ids=batch["input_ids"],
                             attention_mask=batch["attention_mask"],
-                            images = batch["images"],
-                            point_cloud = batch["point_cloud"],
+                            images=batch["images"],
+                            next_images=batch["next_images"] if use_reconstruction else None,
+                            point_cloud=batch["point_cloud"] if use_pointcloud else None,
+                            next_point_cloud=batch["next_point_cloud"] if (use_pointcloud and use_reconstruction) else None,
                             proprio=batch["proprio"],
                             labels=batch["labels"],
                             use_diff=False,
@@ -373,6 +376,18 @@ class TrainingStrategy(ABC):
 
                     if metrics.global_step>=(self.epochs * math.ceil((len(dataloader) / overwatch.world_size() / self.grad_accumulation_steps))):
                         return
+                    
+                    # target_steps = self.epochs * math.ceil(len(dataloader) / overwatch.world_size() / self.grad_accumulation_steps)
+                    # # Check if global_step is a fraction (1/10, 2/10, ..., 10/10) of target_steps
+                    # for i in range(1, 11):
+                    #     if metrics.global_step == target_steps * i / 10:
+                    #         self.save_checkpoint(
+                    #             metrics.run_dir, metrics.global_step, epoch, loss.item(), only_trainable=not save_full_model
+                    #         )
+                    #         dist.barrier()
+
+                    # if metrics.global_step>=(self.epochs * math.ceil((len(dataloader) / overwatch.world_size() / self.grad_accumulation_steps))):
+                    #     return
 
                 # Update Progress Bar
                 progress.update()

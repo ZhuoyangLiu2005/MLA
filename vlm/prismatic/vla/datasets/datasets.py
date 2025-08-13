@@ -62,11 +62,12 @@ class RLDSBatchTransform:
     image_transform: CLIPImageProcessor
     prompt_builder_fn: Type[PromptBuilder]
     predict_stop_token: bool = True
+    use_pointcloud: bool = False
 
     def __call__(self, rlds_batch: Dict[str, Any]) -> Dict[str, Any]:
         """Converts a RLDS batch to the format expected by the OpenVLA collator/models."""
         dataset_name, action, proprio = rlds_batch["dataset_name"], rlds_batch["action"][0], rlds_batch["observation"]["proprio"][0]
-        
+
         # For future action predictions
         if rlds_batch["action"].shape[0] > 1:
             dataset_name, action, proprio = rlds_batch["dataset_name"], rlds_batch["action"], rlds_batch["observation"]["proprio"]
@@ -90,11 +91,15 @@ class RLDSBatchTransform:
             next_image = self.image_transform.preprocess(next_front_img, return_tensors='pt')['pixel_values'][0] if next_front_img is not None else None
         image = torch.cat([image, image_mask], dim=0)
         
-        # pointcloud
-        front_pc = rlds_batch["observation"]["point_cloud"][0] # (n_points, 3)
-        next_front_pc = rlds_batch["observation"]["next_point_cloud"][0]
-        front_pc = torch.tensor(front_pc).to(torch.float)
-        next_front_pc = torch.tensor(next_front_pc).to(torch.float)
+        # load pointcloud if needed
+        if self.use_pointcloud:
+            front_pc = rlds_batch["observation"]["point_cloud"][0] # (n_points, 3)
+            next_front_pc = rlds_batch["observation"]["next_point_cloud"][0]
+            front_pc = torch.tensor(front_pc).to(torch.float)
+            next_front_pc = torch.tensor(next_front_pc).to(torch.float)
+        else:
+            front_pc = None
+            next_front_pc = None
 
         lang = rlds_batch["task"]["language_instruction"].decode().lower()
 
@@ -177,6 +182,7 @@ class RLDSDataset(IterableDataset):
         train: bool = True,
         image_aug: bool = False,
         load_all_data_for_training: bool = True,
+        use_pointcloud: bool = False,
     ) -> None:
         """Lightweight wrapper around RLDS TFDS Pipeline for use with PyTorch/OpenVLA Data Loaders."""
         self.data_root_dir, self.data_mix, self.batch_transform = data_root_dir, data_mix, batch_transform
@@ -217,6 +223,7 @@ class RLDSDataset(IterableDataset):
             traj_read_threads=len(mixture_spec),
             train=train,
             load_all_data_for_training=load_all_data_for_training,
+            use_pointcloud=use_pointcloud,
         )
 
         # If applicable, enable image augmentations

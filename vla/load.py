@@ -58,10 +58,11 @@ def load(
     load_for_training: bool = False,
     class_dropout_prob: float = 0.0,
     use_diff: bool = False,
+    use_pointcloud: bool = False,
     use_reconstruction: bool = False,
+    recon_image: bool = False,
+    recon_pointcloud: bool = False,
     llm_vision_layers: int = 8,
-    llm_action_layers: int = 8,
-    llm_action_layers_stride: int = 2,
 ) -> PrismaticVLM:
     """Loads a pretrained PrismaticVLM from either local disk or the HuggingFace Hub."""
     if os.path.isdir(model_id_or_path):
@@ -111,8 +112,6 @@ def load(
         hf_token=hf_token,
         inference_mode=not load_for_training,
         llm_vision_layers=llm_vision_layers,
-        llm_action_layers=llm_action_layers,
-        llm_action_layers_stride=llm_action_layers_stride,
     )
 
     # Load VLM using `from_pretrained` (clobbers HF syntax... eventually should reconcile)
@@ -125,7 +124,10 @@ def load(
         freeze_weights=not load_for_training,
         class_dropout_prob=class_dropout_prob,
         use_diff=use_diff,
+        use_pointcloud=use_pointcloud,
         use_reconstruction=use_reconstruction,
+        recon_image=recon_image,
+        recon_pointcloud=recon_pointcloud,
     )
 
     return vlm
@@ -139,10 +141,11 @@ def load_openvla(
     load_for_training: bool = False,
     class_dropout_prob: float = 0.0,
     use_diff: bool = False,
+    use_pointcloud: bool = False,
     use_reconstruction: bool = False,
+    recon_image: bool = False,
+    recon_pointcloud: bool = False,
     llm_vision_layers: int = 8,
-    llm_action_layers: int = 8,
-    llm_action_layers_stride: int = 2,
 ) -> PrismaticVLM:
     """Loads a pretrained PrismaticVLM from either local disk or the HuggingFace Hub."""
 
@@ -183,8 +186,6 @@ def load_openvla(
         hf_token=hf_token,
         inference_mode=not load_for_training,
         llm_vision_layers=llm_vision_layers,
-        llm_action_layers=llm_action_layers,
-        llm_action_layers_stride=llm_action_layers_stride,
     )
 
     weights_path_0 = run_dir / "model-00001-of-00003.safetensors"
@@ -221,11 +222,13 @@ def load_openvla(
         pretrained_state_dict,
         model_cfg["model_id"],
         llm_backbone,
-        arch_specifier=model_cfg["arch_specifier"],
         freeze_weights=not load_for_training,
         class_dropout_prob=class_dropout_prob,
         use_diff=use_diff,
+        use_pointcloud=use_pointcloud,
         use_reconstruction=use_reconstruction,
+        recon_image=recon_image,
+        recon_pointcloud=recon_pointcloud,
     )
     return vlm
 
@@ -239,10 +242,11 @@ def load_vla(
     model_type: str = "pretrained",
     class_dropout_prob: float=0.0,
     use_diff: bool = False,
+    use_pointcloud: bool = False,
     use_reconstruction: bool = False,
+    recon_image: bool = False,
+    recon_pointcloud: bool = False,
     llm_vision_layers: int = 8,
-    llm_action_layers: int = 8,
-    llm_action_layers_stride: int = 2,
     **kwargs,
 ) -> CogACT:
     """Loads a pretrained CogACT from either local disk or the HuggingFace Hub."""
@@ -313,8 +317,6 @@ def load_vla(
         hf_token=hf_token,
         inference_mode=not load_for_training,
         llm_vision_layers=llm_vision_layers,
-        llm_action_layers=llm_action_layers,
-        llm_action_layers_stride=llm_action_layers_stride,
     )
     
     # 28.9G
@@ -333,7 +335,10 @@ def load_vla(
         norm_stats=norm_stats,
         class_dropout_prob=class_dropout_prob,
         use_diff=use_diff,
+        use_pointcloud=use_pointcloud,
         use_reconstruction=use_reconstruction,
+        recon_image=recon_image,
+        recon_pointcloud=recon_pointcloud,
         **kwargs,
     )
     # 30.5G

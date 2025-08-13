@@ -60,7 +60,10 @@ class CogACT(nn.Module):
         use_ema: bool = False,
         norm_stats: Dict[str, Dict[str, Dict[str, Dict[str, List[float]]]]] = None,
         use_diff: bool = False,
+        use_pointcloud: bool = False,
         use_reconstruction: bool = False,
+        recon_image: bool = False,
+        recon_pointcloud: bool = False,
         **kwargs,
     ) -> None:
         super().__init__()
@@ -68,6 +71,10 @@ class CogACT(nn.Module):
         self.action_tokenizer = action_tokenizer
 
         self.use_diff = use_diff
+        self.use_pointcloud = use_pointcloud
+        self.use_reconstruction = use_reconstruction
+        self.recon_image = recon_image
+        self.recon_pointcloud = recon_pointcloud
         self.vlm = vlm
         self.future_action_window_size = future_action_window_size
         self.vlm.future_action_window_size = future_action_window_size
@@ -144,9 +151,12 @@ class CogACT(nn.Module):
             labels = labels.repeat(repeated_diffusion_steps, *([1] * (labels.ndimension() - 1)))
 
             images = images.repeat(repeated_diffusion_steps, *([1] * (images.ndimension() - 1)))
-            next_images = next_images.repeat(repeated_diffusion_steps, *([1] * (next_images.ndimension() - 1)))
-            point_cloud = point_cloud.repeat(repeated_diffusion_steps, *([1] * (point_cloud.ndimension() - 1)))
-            next_point_cloud = next_point_cloud.repeat(repeated_diffusion_steps, *([1] * (next_point_cloud.ndimension() - 1)))
+            if self.use_reconstruction and self.recon_image:
+                next_images = next_images.repeat(repeated_diffusion_steps, *([1] * (next_images.ndimension() - 1)))
+            if self.use_pointcloud:
+                point_cloud = point_cloud.repeat(repeated_diffusion_steps, *([1] * (point_cloud.ndimension() - 1)))
+            if self.use_pointcloud and self.use_reconstruction and self.recon_pointcloud:
+                next_point_cloud = next_point_cloud.repeat(repeated_diffusion_steps, *([1] * (next_point_cloud.ndimension() - 1)))
         
             noise = torch.randn_like(actions_future)  # [B, T, C]
             timestep = torch.randint(0, self.diffusion.num_timesteps, (actions_future.size(0),), device= actions.device)
@@ -174,10 +184,10 @@ class CogACT(nn.Module):
             assert noise_pred.shape == noise.shape == actions.shape
             loss = ((noise_pred - noise) ** 2).mean()
             # loss metrics
-            print(f"Diffusion Loss: {loss.item()}, \
-                Image Reconstruction Loss: {reconstruction_losses['total_reconstruction_loss'].item()}, \
-                PointCloud Reconstruction Loss: {0.0} , \
-                Contrastive Loss: {output.contrastive_loss.item()}") 
+            # print(f"Diffusion Loss: {loss.item()}, \
+            #     Image Reconstruction Loss: {0.0}, \
+            #     PointCloud Reconstruction Loss: {reconstruction_losses['total_reconstruction_loss'].item()} , \
+            #     Contrastive Loss: {0.0}") 
             # reconstruction_losses['image_reconstruction_loss'].item(), reconstruction_losses['pointcloud_coord_loss'].item()
             loss += reconstruction_losses['total_reconstruction_loss']
             return loss, output
@@ -250,8 +260,10 @@ class CogACT(nn.Module):
         norm_stats = None,
         class_dropout_prob: float = 0.0,
         use_diff: bool = False,
-        enable_latent_supervision: bool = False,
-        latent_dim: int = 512,
+        use_pointcloud: bool = False,
+        use_reconstruction: bool = False,
+        recon_image: bool = False,
+        recon_pointcloud: bool = False,
         **kwargs,
     ) -> CogACT:
 
@@ -263,8 +275,10 @@ class CogACT(nn.Module):
             enable_mixed_precision_training=enable_mixed_precision_training,
             class_dropout_prob=class_dropout_prob,
             use_diff=use_diff,
-            enable_latent_supervision=enable_latent_supervision,
-            latent_dim=latent_dim,
+            use_pointcloud=use_pointcloud,
+            use_reconstruction=use_reconstruction,
+            recon_image=recon_image,
+            recon_pointcloud=recon_pointcloud,
             **kwargs,
         )
 
@@ -286,16 +300,16 @@ class CogACT(nn.Module):
             print("\n\nNo projector_2d found in checkpoint, initializing a new one!!!!\n")
 
         # Try to load vision_tower_3d
-        if "vision_tower_3d" in model_state_dict.keys():
+        if use_pointcloud and "vision_tower_3d" in model_state_dict.keys():
             vlm.vision_tower_3d.load_state_dict(model_state_dict["vision_tower_3d"])
             print("\n\nSuccessfully loaded vision_tower_3d !!!!\n")
         else:
-            vlm.load_encoder_to_vision_tower(ckpt_path="/media/liuzhuoyang/new_vla/Any2Point/Any2Point_CLIP_Lang/ckpts/Language_CLIP_Scan.pth",
-                vision_tower_3d=vlm.vision_tower_3d)
+            # vlm.load_encoder_to_vision_tower(ckpt_path="/media/liuzhuoyang/new_vla/Any2Point/Any2Point_CLIP_Lang/ckpts/Language_CLIP_Scan.pth",
+            #     vision_tower_3d=vlm.vision_tower_3d)
             print("\n\nNo vision_tower_3d found in checkpoint, load from Any2Point ckpt!!!!\n")
             
-         # Try to load projector_3d
-        if "projector_3d" in model_state_dict.keys():
+        # Try to load projector_3d
+        if use_pointcloud and "projector_3d" in model_state_dict.keys():
             vlm.projector_3d.load_state_dict(model_state_dict["projector_3d"])
             print("\n\nSuccessfully loaded projector_3d !!!!\n")
         else:
@@ -322,6 +336,34 @@ class CogACT(nn.Module):
         else:
             print("\n\nNo x_embedder, t_embedder, final_layer found in checkpoint!!!!\n")
 
+        if use_reconstruction and recon_image and "reconstruction_manager" in model_state_dict.keys():
+            recon_state_dict = {}
+            for k, v in model_state_dict["reconstruction_manager"].items():
+                if k.startswith("image_recon_module."):
+                    new_key = k[len("image_recon_module."):]
+                    recon_state_dict[new_key] = v
+            if recon_state_dict:
+                vlm.reconstruction_manager.image_recon_module.load_state_dict(recon_state_dict)
+                print("\n\nSuccessfully loaded reconstruction_manager.image_recon_module from checkpoint!!!!\n")
+            else:
+                print("\n\nNo reconstruction_manager.image_recon_module found in checkpoint!!!!\n")
+        else:
+            print("\n\nNo reconstruction_manager.image_recon_module found in checkpoint!!!!\n")
+
+        if use_reconstruction and recon_pointcloud and "reconstruction_manager" in model_state_dict.keys():
+            recon_state_dict = {}
+            for k, v in model_state_dict["reconstruction_manager"].items():
+                if k.startswith("pointcloud_recon_module."):
+                    new_key = k[len("pointcloud_recon_module."):]
+                    recon_state_dict[new_key] = v
+            if recon_state_dict:
+                vlm.reconstruction_manager.pointcloud_recon_module.load_state_dict(recon_state_dict)
+                print("\n\nSuccessfully loaded reconstruction_manager.pointcloud_recon_module from checkpoint!!!!\n")
+            else:
+                print("\n\nNo reconstruction_manager.pointcloud_recon_module found in checkpoint!!!!\n")
+        else:
+            print("\n\nNo reconstruction_manager.image_recon_module found in checkpoint!!!!\n")
+
         # Freeze Weights
         if freeze_weights:
             vlm.requires_grad_(False)
@@ -338,6 +380,10 @@ class CogACT(nn.Module):
                         use_ema = use_ema,
                         norm_stats = norm_stats,
                         use_diff=use_diff,
+                        use_pointcloud=use_pointcloud,
+                        use_reconstruction=use_reconstruction,
+                        recon_image=recon_image,
+                        recon_pointcloud=recon_pointcloud,
                     )
 
         return cogact        

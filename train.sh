@@ -1,6 +1,6 @@
 
 cd /media/liuzhuoyang/new_vla/Rec_Diff_beta/LLM_policy
-export CUDA_VISIBLE_DEVICES=4,5,6,7
+export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 export HF_HOME=/media/huggingface
 
 export PYTHONPATH=/media/liuzhuoyang/new_vla/Rec_Diff_beta/LLM_policy:$PYTHONPATH
@@ -23,17 +23,20 @@ USE_DIFF=true
 REPEATED_DIFFUSION_STEPS=4
 CLASS_DROPOUT_PROB=0.0
 PRETRAIN=Diff_300
+
+USE_POINTCLOUD=true
 LLM_VISION_LAYERS=8
 
-RECON_IMG=true
-USE_ROI=true
+USE_REC=true
+RECON_IMG=false
+USE_ROI=false
 RECON_PC=true
 
 
-SETTING=tttmmmppp_Pretrain${PRETRAIN}_FreezeVis${FREEZE_VISON}_Window${FUTURE_ACTION_STEPS}_Diff${USE_DIFF}_Rec${USE_REC}only2dmaeall_Contrastive_Vislayer${LLM_VISION_LAYERS}_1024_0403_0810
+SETTING=Pretrain${PRETRAIN}_FreezeVis${FREEZE_VISON}_Window${FUTURE_ACTION_STEPS}_Diff${USE_DIFF}_Rec${USE_REC}3dpointmae_Contrastive_Vislayer${LLM_VISION_LAYERS}_1024_0403_0813
 
 TASK=4tasks_selected_keyframe_nextpc_0806
-NUM_GPUS=4
+NUM_GPUS=8
 NODES=1
 BATCH_SIZE=8
 EPOCHS=300
@@ -59,14 +62,18 @@ torchrun --standalone --nnodes ${NODES} --nproc-per-node ${NUM_GPUS} scripts/tra
   --image_aug false \
   --wandb_project one_model_vla_sft \
   --wandb_entity liumail2023-peking-university \
-  --save_interval 1000 \
+  --save_interval 100 \
   --action_dim 7 \
   --repeated_diffusion_steps ${REPEATED_DIFFUSION_STEPS} \
   --action_tokenizer_exist ${ACTION_TOKENIZER_EXIST} \
   --future_action_window_size ${FUTURE_ACTION_STEPS} \
   --class_dropout_prob ${CLASS_DROPOUT_PROB} \
   --use_diff ${USE_DIFF} \
+  --use_pointcloud ${USE_POINTCLOUD} \
   --use_reconstruction ${USE_REC} \
+  --recon_image ${RECON_IMG} \
+  --use_roi ${USE_ROI} \
+  --recon_pointcloud ${RECON_PC} \
   --is_resume False \
   --pretrained_checkpoint "/media/liuzhuoyang/new_vla/Diff_VLA_beta/exp/exp_4tasks_selected_keyframe_pointcloud_1024_0403_Pretrain2D_0623_E2_FreezeVistrue_Window0_Difftrue_Contrastive_Vislayer8_1024_0403_0801/checkpoints/step-007803-epoch-300-loss=1.2505.pt"
   # --pretrained_checkpoint "/media/huggingface/hub/models--openvla--openvla-7b/snapshots/31f090d05236101ebfc381b61c674dd4746d4ce0"

@@ -119,7 +119,7 @@ def visualize_reconstruction_rgb(reconstruction_outputs,
                                  image_patch_size, 
                                  next_images, 
                                  save_dir
-                                ):
+                            ):
     """8-subplot layout with Target/Recon RGB + their separate channels"""
     os.makedirs(save_dir, exist_ok=True)
     if 'image_reconstruction' in reconstruction_outputs and next_images is not None:
@@ -193,4 +193,4 @@ def visualize_reconstruction_rgb(reconstruction_outputs,
             save_image(next_images[i], os.path.join(save_dir, f'target_{i}.png'))
             save_image(reconstructed_images[i], os.path.join(save_dir, f'reconstructed_{i}.png'))
             
-        print(f"Visualization saved to {save_dir}")
+        # print(f"Visualization saved to {save_dir}")

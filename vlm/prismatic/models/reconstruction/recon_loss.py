@@ -9,6 +9,14 @@ def chamfer_distance(pred, gt):
     loss = dist.min(dim=2)[0].mean() + dist.min(dim=1)[0].mean()
     return loss
 
+def chamfer_distance_l2(pred, gt):
+    # pred: (B, N1, 3), gt: (B, N2, 3)
+    dist_matrix = torch.cdist(pred, gt)  # (B, N1, N2)
+    forward_dist = dist_matrix.min(dim=2)[0].mean(dim=1)  # (B,)
+    backward_dist = dist_matrix.min(dim=1)[0].mean(dim=1)  # (B,)
+    chamfer_dist = forward_dist + backward_dist  # (B,)
+    return chamfer_dist.mean()
+
 def earth_movers_distance(pred, gt):
     # Flatten batch dimension for pairwise distance computation
     B, N, _ = pred.shape
