@@ -17,7 +17,6 @@ Run with:
 
 import json
 import os
-# os.environ["WANDB_MODE"] = "offline"
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -101,6 +100,7 @@ class TrainConfig:
 
     # contrastive
     use_pointcloud: bool = False
+    use_contrastive: bool = False
     llm_vision_layers: int = 8
     
     # reconstruction
@@ -196,6 +196,7 @@ def train(cfg: TrainConfig) -> None:
     overwatch.info(f"Loading Base VLM `{cfg.vla.base_vlm}` from ID/Path")
 
     if cfg.pretrained_checkpoint is not None and 'openvla' not in cfg.pretrained_checkpoint:
+    # if cfg.pretrained_checkpoint is not None:
         # [Validate] Pretrained Checkpoint `step` and `epoch` should match `resume_step` and `resume_epoch`
         #   =>> Note :: We make developers pass in `resume_*` arguments as an extra sanity check!
         if cfg.is_resume:
@@ -207,13 +208,14 @@ def train(cfg: TrainConfig) -> None:
         vla = load_vla(cfg.pretrained_checkpoint, 
                         hf_token=hf_token, 
                         load_for_training=True, 
-                        action_dim=cfg.action_dim,
                         future_action_window_size=cfg.future_action_window_size,
                         past_action_window_size=cfg.past_action_window_size,
                         use_ema=cfg.use_ema,
                         class_dropout_prob=cfg.class_dropout_prob,
+                        action_dim=cfg.action_dim,
                         use_diff=cfg.use_diff,
                         use_pointcloud=cfg.use_pointcloud,
+                        use_contrastive=cfg.use_contrastive,
                         use_reconstruction=cfg.use_reconstruction,
                         recon_image=cfg.recon_image,
                         recon_pointcloud=cfg.recon_pointcloud,
@@ -223,8 +225,10 @@ def train(cfg: TrainConfig) -> None:
         vlm = load_openvla(cfg.pretrained_checkpoint, 
                            hf_token=hf_token, 
                            load_for_training=True, 
+                           action_dim=cfg.action_dim,
                            use_diff=cfg.use_diff,
                            use_pointcloud=cfg.use_pointcloud,
+                           use_contrastive=cfg.use_contrastive,
                            use_reconstruction=cfg.use_reconstruction,
                            recon_image=cfg.recon_image,
                            recon_pointcloud=cfg.recon_pointcloud,
@@ -241,6 +245,7 @@ def train(cfg: TrainConfig) -> None:
                     use_ema=cfg.use_ema,
                     use_diff=cfg.use_diff,
                     use_pointcloud=cfg.use_pointcloud,
+                    use_contrastive=cfg.use_contrastive,
                     use_reconstruction = cfg.use_reconstruction,
                     recon_image=cfg.recon_image,
                     recon_pointcloud=cfg.recon_pointcloud,
@@ -255,6 +260,7 @@ def train(cfg: TrainConfig) -> None:
                 load_for_training=True,
                 use_diff=cfg.use_diff,
                 use_pointcloud=cfg.use_pointcloud,
+                use_contrastive=cfg.use_contrastive,
                 use_reconstruction=cfg.use_reconstruction,
                 recon_image=cfg.recon_image,
                 recon_pointcloud=cfg.recon_pointcloud,
@@ -272,6 +278,7 @@ def train(cfg: TrainConfig) -> None:
                     use_ema=cfg.use_ema,
                     use_diff=cfg.use_diff,
                     use_pointcloud=cfg.use_pointcloud,
+                    use_contrastive=cfg.use_contrastive,
                     use_reconstruction = cfg.use_reconstruction,
                     recon_image=cfg.recon_image,
                     recon_pointcloud=cfg.recon_pointcloud,
@@ -391,6 +398,7 @@ def train(cfg: TrainConfig) -> None:
         save_interval=cfg.save_interval,
         use_diff=cfg.use_diff,
         use_pointcloud=cfg.use_pointcloud,
+        use_contrastive=cfg.use_contrastive,
         use_reconstruction=cfg.use_reconstruction,
         recon_image=cfg.recon_image,
         recon_pointcloud=cfg.recon_pointcloud,

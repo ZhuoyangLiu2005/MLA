@@ -258,6 +258,7 @@ class TrainingStrategy(ABC):
         save_full_model: bool = True,
         use_diff: bool = False,
         use_pointcloud: bool = False,
+        use_contrastive: bool = False,
         use_reconstruction: bool = False,
         recon_image: bool = False,
         recon_pointcloud: bool = False,
@@ -301,7 +302,7 @@ class TrainingStrategy(ABC):
                     "cuda", dtype=self.mixed_precision_dtype, enabled=self.enable_mixed_precision_training
                 ):
                     if use_diff:
-                        loss, output = self.vlm(
+                        loss_dict, output = self.vlm(
                             input_ids=batch["input_ids"],
                             attention_mask=batch["attention_mask"],
                             labels=batch["labels"],
@@ -317,9 +318,13 @@ class TrainingStrategy(ABC):
                             use_diff=True,
                             stage=self.stage,
                         )
-                        ar = torch.tensor(0, dtype=torch.float32) 
-                        metrics.commit(ar_loss=ar,diff_loss=loss) 
-                        # loss += output.contrastive_loss # add the contrastive loss to the total loss
+                        metrics.commit(loss=loss_dict['total_loss'],
+                                    contrastive_loss=loss_dict['contrastive_loss'],
+                                    diff_loss=loss_dict['diff_loss'],
+                                    image_recon_loss=loss_dict['image_recon_loss'],
+                                    point_cloud_recon_loss=loss_dict['point_cloud_recon_loss'],
+                                ) 
+                        loss = loss_dict['total_loss']
                     else: 
                         output = self.vlm(
                             input_ids=batch["input_ids"],
@@ -359,6 +364,7 @@ class TrainingStrategy(ABC):
                     div = (len(vla_dataset) // self.global_batch_size) if (len(vla_dataset) // self.global_batch_size)!=0 else 1
                     epoch = (metrics.global_step + 1) // div
 
+
                     # Push Metrics
                     metrics.commit(update_step_time=True, global_step=metrics.global_step + 1, epoch=epoch, lr=self.lr_scheduler.get_last_lr()[0])
                     status = metrics.push()
@@ -377,6 +383,7 @@ class TrainingStrategy(ABC):
                     if metrics.global_step>=(self.epochs * math.ceil((len(dataloader) / overwatch.world_size() / self.grad_accumulation_steps))):
                         return
                     
+                    
                     # target_steps = self.epochs * math.ceil(len(dataloader) / overwatch.world_size() / self.grad_accumulation_steps)
                     # # Check if global_step is a fraction (1/10, 2/10, ..., 10/10) of target_steps
                     # for i in range(1, 11):
@@ -388,6 +395,7 @@ class TrainingStrategy(ABC):
 
                     # if metrics.global_step>=(self.epochs * math.ceil((len(dataloader) / overwatch.world_size() / self.grad_accumulation_steps))):
                     #     return
+
 
                 # Update Progress Bar
                 progress.update()

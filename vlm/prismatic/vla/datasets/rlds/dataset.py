@@ -50,11 +50,13 @@ def make_dataset_from_rlds(
     action_proprio_normalization_type: NormalizationType = NormalizationType.NORMAL,
     dataset_statistics: Optional[Union[dict, str]] = None,
     absolute_action_mask: Optional[List[bool]] = None,
+    absolute_proprio_mask: Optional[List[bool]] = None,
     action_normalization_mask: Optional[List[bool]] = None,
+    proprio_normalization_mask: Optional[List[bool]] = None,
     num_parallel_reads: int = tf.data.AUTOTUNE,
     num_parallel_calls: int = tf.data.AUTOTUNE,
     load_all_data_for_training: bool = True,
-    use_pointcloud: bool = False,
+    load_pointcloud: Optional[str] = None,
 ) -> Tuple[dl.DLataset, dict]:
     """
     This function is responsible for loading a specific RLDS dataset from storage and getting it into a standardized
@@ -172,12 +174,10 @@ def make_dataset_from_rlds(
         # add timestep info
         new_obs["timestep"] = tf.range(traj_len)
         new_obs["proprio"] = tf.cast(traj["observation"]["proprio"], tf.float32)
-        if use_pointcloud:
+        if load_pointcloud is not None:
             new_obs["point_cloud"] = tf.cast(traj["observation"]["point_cloud"], tf.float32)
-            new_obs["next_point_cloud"] = tf.cast(traj["observation"]["next_pointcloud"], tf.float32)
-        # new_obs["next_front_image"] = tf.cast(traj["observation"]["next_front_image"], tf.float32)
+            new_obs["next_point_cloud"] = tf.cast(traj["observation"]["next_point_cloud"], tf.float32)
         
-
         # extracts `language_key` into the "task" dict
         task = {}
         if language_key is not None:
@@ -204,8 +204,16 @@ def make_dataset_from_rlds(
                 tf.convert_to_tensor(absolute_action_mask, dtype=tf.bool)[None],
                 [traj_len, 1],
             )
+        
+        if absolute_proprio_mask is not None:
+            proprio_shape = traj["observation"]["proprio"].shape[-1]
+            if len(absolute_proprio_mask) != proprio_shape:
+                raise ValueError(
+                    f"Length of absolute_proprio_mask ({len(absolute_proprio_mask)}) "
+                    f"does not match proprio dimension ({proprio_shape})."
+                )
             traj["absolute_proprio_mask"] = tf.tile(
-                tf.convert_to_tensor(absolute_action_mask, dtype=tf.bool)[None],
+                tf.convert_to_tensor(absolute_proprio_mask, dtype=tf.bool)[None],
                 [traj_len, 1],
             )
 
@@ -242,7 +250,13 @@ def make_dataset_from_rlds(
             )
         dataset_statistics["action"]["mask"] = np.array(action_normalization_mask)
 
-        dataset_statistics["proprio"]["mask"] = np.array(action_normalization_mask)
+    if proprio_normalization_mask is not None:
+        if len(proprio_normalization_mask) != dataset_statistics["proprio"]["mean"].shape[-1]:
+            raise ValueError(
+                f"Length of skip_normalization_mask ({len(proprio_normalization_mask)}) "
+                f"does not match proprio dimension ({dataset_statistics['proprio']['mean'].shape[-1]})."
+            )
+        dataset_statistics["proprio"]["mask"] = np.array(proprio_normalization_mask)
 
 
     # construct the dataset
@@ -543,7 +557,7 @@ def make_interleaved_dataset(
 
     # Effective Dataset Length = Number of samples until each dataset has completed at least one epoch
     #   =>> Note :: Only counting the "primary" datasets (i.e., datasets with sample_weight == 1.0)
-    dataset_len = int((np.array(dataset_sizes) / sample_weights)[primary_dataset_indices].max()) // 5
+    dataset_len = int((np.array(dataset_sizes) / sample_weights)[primary_dataset_indices].max()) # // 5
     # dataset_len = 100000 # 36346806
 
     # Allocate Threads based on Weights
@@ -573,7 +587,6 @@ def make_interleaved_dataset(
             num_parallel_reads=reads,
             dataset_statistics=all_dataset_statistics[dataset_kwargs["name"]],
             load_all_data_for_training=load_all_data_for_training,
-            use_pointcloud=use_pointcloud,
         )
         dataset = apply_trajectory_transforms(
             dataset.repeat(),

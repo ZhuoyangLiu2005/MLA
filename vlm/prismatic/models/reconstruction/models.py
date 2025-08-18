@@ -263,7 +263,7 @@ class ImageReconstructionModule(nn.Module):
         
         # Apply delta predictions
         delta_img = delta_all.view(B * num_patches, C, ps, ps)
-        gen_weight = 0.95
+        gen_weight = 0.94
         pure_pred = delta_img
         residual_pred = curr_patches_img + delta_img
         roi_pred = (1 - gen_weight) * residual_pred + gen_weight * pure_pred

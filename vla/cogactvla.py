@@ -61,6 +61,7 @@ class CogACT(nn.Module):
         norm_stats: Dict[str, Dict[str, Dict[str, Dict[str, List[float]]]]] = None,
         use_diff: bool = False,
         use_pointcloud: bool = False,
+        use_contrastive: bool = False,
         use_reconstruction: bool = False,
         recon_image: bool = False,
         recon_pointcloud: bool = False,
@@ -72,6 +73,7 @@ class CogACT(nn.Module):
 
         self.use_diff = use_diff
         self.use_pointcloud = use_pointcloud
+        self.use_contrastive = use_contrastive
         self.use_reconstruction = use_reconstruction
         self.recon_image = recon_image
         self.recon_pointcloud = recon_pointcloud
@@ -182,15 +184,26 @@ class CogACT(nn.Module):
                 use_diff = self.use_diff,
             )
             assert noise_pred.shape == noise.shape == actions.shape
-            loss = ((noise_pred - noise) ** 2).mean()
-            # loss metrics
-            # print(f"Diffusion Loss: {loss.item()}, \
-            #     Image Reconstruction Loss: {0.0}, \
-            #     PointCloud Reconstruction Loss: {reconstruction_losses['total_reconstruction_loss'].item()} , \
-            #     Contrastive Loss: {0.0}") 
-            # reconstruction_losses['image_reconstruction_loss'].item(), reconstruction_losses['pointcloud_coord_loss'].item()
-            loss += reconstruction_losses['total_reconstruction_loss']
-            return loss, output
+            loss_dict = {
+                'total_loss': torch.tensor(0, dtype=torch.float32) ,
+                'contrastive_loss': torch.tensor(0, dtype=torch.float32) ,
+                'diff_loss': torch.tensor(0, dtype=torch.float32) ,
+                'image_recon_loss': torch.tensor(0, dtype=torch.float32) ,
+                'point_cloud_recon_loss': torch.tensor(0, dtype=torch.float32) ,
+            }
+            diff_loss = ((noise_pred - noise) ** 2).mean()
+            loss_dict['total_loss'] = diff_loss
+            loss_dict['diff_loss'] = diff_loss
+            if self.use_reconstruction and self.recon_image:
+                loss_dict['image_recon_loss'] = reconstruction_losses['image_recon_loss']
+                loss_dict['total_loss'] += reconstruction_losses['image_recon_loss']
+            if self.use_reconstruction and self.recon_pointcloud:
+                loss_dict['point_cloud_recon_loss'] = reconstruction_losses['point_cloud_recon_loss']
+                loss_dict['total_loss'] += reconstruction_losses['point_cloud_recon_loss']
+            if self.use_contrastive:
+                loss_dict['contrastive_loss'] = output.contrastive_loss
+                loss_dict['total_loss'] += output.contrastive_loss
+            return loss_dict, output
         else:
             output = self.vlm(
                 input_ids=input_ids,
@@ -207,6 +220,8 @@ class CogACT(nn.Module):
                 return_dict=return_dict,
                 use_diff = self.use_diff,
             )
+            if self.use_reconstruction:
+                output.loss += reconstruction_losses['total_reconstruction_loss']
             return output
         
 
@@ -261,6 +276,7 @@ class CogACT(nn.Module):
         class_dropout_prob: float = 0.0,
         use_diff: bool = False,
         use_pointcloud: bool = False,
+        use_contrastive: bool = False,
         use_reconstruction: bool = False,
         recon_image: bool = False,
         recon_pointcloud: bool = False,
@@ -275,7 +291,9 @@ class CogACT(nn.Module):
             enable_mixed_precision_training=enable_mixed_precision_training,
             class_dropout_prob=class_dropout_prob,
             use_diff=use_diff,
+            action_dim=action_dim,
             use_pointcloud=use_pointcloud,
+            use_contrastive=use_contrastive,
             use_reconstruction=use_reconstruction,
             recon_image=recon_image,
             recon_pointcloud=recon_pointcloud,
@@ -336,7 +354,7 @@ class CogACT(nn.Module):
         else:
             print("\n\nNo x_embedder, t_embedder, final_layer found in checkpoint!!!!\n")
 
-        if use_reconstruction and recon_image and "reconstruction_manager" in model_state_dict.keys():
+        if use_reconstruction and "reconstruction_manager" in model_state_dict.keys() and recon_image:
             recon_state_dict = {}
             for k, v in model_state_dict["reconstruction_manager"].items():
                 if k.startswith("image_recon_module."):
@@ -350,7 +368,7 @@ class CogACT(nn.Module):
         else:
             print("\n\nNo reconstruction_manager.image_recon_module found in checkpoint!!!!\n")
 
-        if use_reconstruction and recon_pointcloud and "reconstruction_manager" in model_state_dict.keys():
+        if use_reconstruction and "reconstruction_manager" in model_state_dict.keys() and recon_pointcloud:
             recon_state_dict = {}
             for k, v in model_state_dict["reconstruction_manager"].items():
                 if k.startswith("pointcloud_recon_module."):
@@ -372,15 +390,16 @@ class CogACT(nn.Module):
         # Initialize CogACT
         cogact = CogACT(vlm,
                         action_tokenizer,
-                        token_size = vlm.llm_backbone.llm.lm_head.in_features,
-                        action_dim = action_dim,
-                        future_action_window_size = future_action_window_size,
-                        past_action_window_size = past_action_window_size,
-                        action_model_type = action_model_type,
-                        use_ema = use_ema,
-                        norm_stats = norm_stats,
+                        token_size=vlm.llm_backbone.llm.lm_head.in_features,
+                        action_dim=action_dim,
+                        future_action_window_size=future_action_window_size,
+                        past_action_window_size=past_action_window_size,
+                        action_model_type=action_model_type,
+                        use_ema=use_ema,
+                        norm_stats=norm_stats,
                         use_diff=use_diff,
                         use_pointcloud=use_pointcloud,
+                        use_contrastive=use_contrastive,
                         use_reconstruction=use_reconstruction,
                         recon_image=recon_image,
                         recon_pointcloud=recon_pointcloud,
@@ -485,175 +504,6 @@ class CogACT(nn.Module):
         )
         return actions
     
-    @torch.inference_mode()
-    def predict_action_ar_multi_head(
-        self, 
-        image: Optional[Image] = None,  # 默认值为None
-        pointcloud : Optional[torch.FloatTensor] = None,
-        instruction: Optional[str] = None,
-        unnorm_key: Optional[str] = None, 
-        cur_robot_state: Optional[str] = None,
-        action_dim: int = 7,
-        **kwargs: str
-    ) -> np.ndarray:
-        """
-        Core function for VLA inference; maps input image and task instruction to continuous action.
-
-        @param image: PIL Image as [height, width, 3]
-        @param instruction: Task instruction string
-        @param unnorm_key: Optional dataset name for retrieving un-normalizing statistics; if None, checks that model
-                           was trained only on a single dataset, and retrieves those statistics.
-        @param cfg_scale: Scaling factor for classifier-free guidance (CFG); if == 1.0, CFG is disabled.
-        @param use_ddim: Use DDIM sampling instead of DDPM sampling.
-        @param num_ddim_steps: Number of DDIM steps to use for sampling.
-
-        @return Unnormalized (continuous) action vector --> end-effector deltas.
-        """
-        self.vlm.eval()
-        image_transform, tokenizer = self.vlm.get_vision_tower_2d().image_processor, self.vlm.llm_backbone.tokenizer
-
-        # Build VLA Prompt
-        prompt_builder = self.vlm.get_prompt_builder()
-        prompt_builder.add_turn(role="human", message=f"What action should the robot take to {instruction.lower()}?")
-        prompt_text = prompt_builder.get_prompt()
-        
-        if cur_robot_state is not None:
-            proprio_norm_stats = self.get_proprio_stats(unnorm_key)
-            mask = proprio_norm_stats.get("mask", np.ones_like(proprio_norm_stats["q01"], dtype=bool))
-            proprio_high, proprio_low = np.array(proprio_norm_stats["q99"]), np.array(proprio_norm_stats["q01"])
-            cur_robot_state = np.where(
-                mask,
-                2 * (cur_robot_state - proprio_low) / (proprio_high - proprio_low + 1e-8) - 1,
-                cur_robot_state,
-            )
-            cur_robot_state = np.clip(cur_robot_state, -1, 1)
-            cur_robot_state = torch.tensor(cur_robot_state, dtype=torch.float32).unsqueeze(0).unsqueeze(0).to(self.vlm.device)
-
-        # Prepare Inputs
-        input_ids = tokenizer(prompt_text, truncation=True, return_tensors="pt").input_ids.to(self.vlm.device)
-        if isinstance(tokenizer, LlamaTokenizerFast):
-            # If the special empty token ('') does not already appear after the colon (':') token in the prompt
-            # (after "OUT:" or "ASSISTANT:"), insert it to match the inputs seen at training time
-            if not torch.all(input_ids[:, -1] == 29871):
-                input_ids = torch.cat(
-                    (input_ids, torch.unsqueeze(torch.Tensor([29871]).long(), dim=0).to(self.vlm.device)), dim=1
-                )
-        else:
-            raise ValueError(f"Unsupported `tokenizer` type = {type(tokenizer)}")
-
-        # Preprocess Image
-        image_mask = torch.ones(1, 672, 672) 
-        image = image_transform.preprocess(image, return_tensors='pt')['pixel_values'][0]   
-        image = torch.cat([image, image_mask], dim=0)
-        image = image.unsqueeze(0).to(self.vlm.device)
-
-        # Preprocess PointCloud
-        pointcloud = pointcloud.to(self.vlm.device).contiguous()
-        
-        # Invoke super().generate --> taps into `GenerationMixin` which (redirects) to `forward()`
-        autocast_dtype = self.vlm.llm_backbone.half_precision_dtype
-
-        num_action_tokens = self.get_action_dim(unnorm_key)
-        num_heads = 5 # total number of action layers
-
-        start_a = time.time()
-        with torch.autocast("cuda", dtype=autocast_dtype, enabled=self.vlm.enable_mixed_precision_training):
-            # --- 单次前传获取初始状态 ---
-            # 准备VLM的完整输入，但labels为None
-            # 你的VLM类的forward需要能处理这些参数
-            vlm_output = self.vlm(
-                images=image,
-                point_cloud=pointcloud,
-                input_ids=input_ids,
-                proprio=cur_robot_state,
-                output_hidden_states=True,
-                return_dict=True,
-                use_cache=True,
-            )
-            all_logits_list = vlm_output.all_logits_for_action
-            initial_past_key_values = vlm_output.past_key_values
-
-            expanded_past_key_values = []
-            if initial_past_key_values is not None:
-                for layer_past in initial_past_key_values:
-                    expanded_key = layer_past[0].expand(num_heads, -1, -1, -1)
-                    expanded_value = layer_past[1].expand(num_heads, -1, -1, -1)
-                    expanded_past_key_values.append((expanded_key, expanded_value))
-            past_key_values = tuple(expanded_past_key_values)
-            
-            next_token_ids_list = []
-            for head_idx in range(num_heads):
-                next_token_logits = all_logits_list[head_idx][0, -1, :] # Batch=1, 最后一个token的logits
-                next_token_id = torch.argmax(next_token_logits, dim=-1) # 0D scalar
-                next_token_ids_list.append(next_token_id)
-                
-            current_input_ids = torch.stack(next_token_ids_list).unsqueeze(1) # Shape: [num_heads, 1]
-            
-            expanded_input_ids = input_ids.expand(num_heads, -1)
-            generated_sequences_so_far = torch.cat([expanded_input_ids, current_input_ids], dim=1)
-            log_probs_sequences = []
-            for head_idx in range(num_heads):
-                log_probs = F.log_softmax(all_logits_list[head_idx][0, -1, :], dim=-1)
-                token_log_prob = log_probs[next_token_ids_list[head_idx]].item()
-                log_probs_sequences.append(token_log_prob)
-                
-            for _ in range(num_action_tokens - 1): # 因为已经生成了一个，所以循环次数减1
-                vlm_output = self.vlm(
-                    input_ids=current_input_ids,
-                    past_key_values=past_key_values,
-                    images=None, 
-                    proprio=None,
-                    use_cache=True,
-                    return_dict=True,
-                    # output_attentions=True,
-                    output_hidden_states=True,
-                )
-                all_logits_list = vlm_output.all_logits_for_action
-                past_key_values = vlm_output.past_key_values
-                
-                next_token_ids_list = []
-                for head_idx in range(num_heads):
-                    # logits_for_head has shape [num_heads, 1, vocab_size]
-                    # 我们需要为每个头选择自己的那一份
-                    next_token_logits = all_logits_list[head_idx][head_idx, -1, :]
-                    next_token_id = torch.argmax(next_token_logits, dim=-1)
-                    next_token_ids_list.append(next_token_id)
-
-                    # 更新置信度
-                    log_probs = F.log_softmax(next_token_logits, dim=-1)
-                    log_probs_sequences[head_idx] += log_probs[next_token_id].item()
-
-                current_input_ids = torch.stack(next_token_ids_list).unsqueeze(1) # Shape: [num_heads, 1]
-                # 更新已生成的序列
-                generated_sequences_so_far = torch.cat([generated_sequences_so_far, current_input_ids], dim=1)
-            
-        end_a = time.time()
-        
-        confidence_scores = [log_prob / num_action_tokens for log_prob in log_probs_sequences]
-        best_head_idx = np.argmax(confidence_scores)
-        # best_head_idx = 0 
-        # print(f"DEBUG: Forcing output from Main Head (Head Index 0)") # 可选的打印信息    
-            
-        initial_prompt_len = input_ids.shape[1]
-        predicted_action_token_ids = generated_sequences_so_far[best_head_idx, initial_prompt_len:]
-        print(f"Selected action from Head #{best_head_idx} with confidence (avg log-prob): {confidence_scores[best_head_idx]:.4f}")    
-            
-        normalized_actions = self.action_tokenizer.decode_token_ids_to_actions(predicted_action_token_ids.cpu().numpy())    
-
-        action_norm_stats = self.get_action_stats(unnorm_key)
-        mask = action_norm_stats.get("mask", np.ones_like(action_norm_stats["q01"], dtype=bool))
-        action_high, action_low = np.array(action_norm_stats["q99"]), np.array(action_norm_stats["q01"])
-        normalized_actions = np.clip(normalized_actions, -1, 1)
-        normalized_actions[6] = np.where(normalized_actions[6] < 0.5, 0, 1) # 对夹爪状态的特殊处理
-        
-        actions = np.where(
-            mask,
-            0.5 * (normalized_actions + 1) * (action_high - action_low) + action_low,
-            normalized_actions,
-        )
-        return actions, confidence_scores
-
-    
 
     @torch.inference_mode()
     def predict_action_diff(
@@ -728,6 +578,8 @@ class CogACT(nn.Module):
         image = image.unsqueeze(0).to(self.vlm.device)
         
         # Preprocess PointCloud
+        if isinstance(pointcloud, np.ndarray):
+            pointcloud = torch.from_numpy(pointcloud)
         pointcloud = pointcloud.to(self.vlm.device).contiguous()
         
         # Preprocess robot state
@@ -778,8 +630,6 @@ class CogACT(nn.Module):
             if input_ids_diff is None:
                 input_ids_diff = input_ids
                 input_ids_diff = input_ids_diff[:, :-3] # prism-dinosiglip-224px+7b
-            # print(input_ids_diff)
-            # input()
             
             if using_cfg:
                 noise = torch.cat([noise, noise], 0)

@@ -1126,7 +1126,7 @@ class LlamaModel(LlamaPreTrainedModel):
 
         return causal_mask
 
-from prismatic.models.fuser.contrastive import SceneLevelContrastiveLoss, TokenLevelContrastiveLoss, CoordinateAwareContrastiveLoss, EnhancedContrastiveLoss
+from prismatic.models.fuser.contrastive import SceneLevelContrastiveLoss, TokenLevelContrastiveLoss, CoordinateAwareContrastiveLoss
 class LlamaForCausalLM(LlamaPreTrainedModel):
     _tied_weights_keys = ["lm_head.weight"]
 

@@ -824,25 +824,33 @@ def tdroid_dataset_transform(trajectory: Dict[str, Any]) -> Dict[str, Any]:
     return trajectory
 
 def rlbench_transform_next(trajectory: Dict[str, Any]) -> Dict[str, Any]:
-    # Get the front images and pointclouds
     front_images = trajectory["observation"]["front_image"]
     pointclouds = trajectory["observation"]["point_cloud"]
     
     next_front_image = tf.concat([front_images[1:], front_images[-1:]], axis=0)
-    next_pointcloud = tf.concat([pointclouds[1:], pointclouds[-1:]], axis=0)
-    
-    # Add the new fields to the observation dictionary
+    next_point_cloud = tf.concat([pointclouds[1:], pointclouds[-1:]], axis=0)
+
     trajectory["observation"]["next_front_image"] = next_front_image
-    trajectory["observation"]["next_pointcloud"] = next_pointcloud
+    trajectory["observation"]["next_point_cloud"] = next_point_cloud
+    
+    return trajectory
+
+def metaworld_transform_next(trajectory: Dict[str, Any]) -> Dict[str, Any]:
+    image_third = trajectory["observation"]["image_third"]
+    pointclouds = trajectory["observation"]["point_cloud"]
+    
+    next_image_third = tf.concat([image_third[1:], image_third[-1:]], axis=0)
+    next_point_cloud = tf.concat([pointclouds[1:], pointclouds[-1:]], axis=0)
+    
+    trajectory["observation"]["next_image_third"] = next_image_third
+    trajectory["observation"]["next_point_cloud"] = next_point_cloud
     
     return trajectory
 
 def rtx_transform_next(trajectory: Dict[str, Any]) -> Dict[str, Any]:
-    # Get the front images and pointclouds
-    front_images = trajectory["observation"]["image"]
-    next_front_image = tf.concat([front_images[1:], front_images[-1:]], axis=0)
-    # Add the new fields to the observation dictionary
-    trajectory["observation"]["next_image"] = next_front_image
+    images = trajectory["observation"]["image"]
+    next_image = tf.concat([images[1:], images[-1:]], axis=0)
+    trajectory["observation"]["next_image"] = next_image
     
     return trajectory
 
@@ -925,5 +933,6 @@ OXE_STANDARDIZATION_TRANSFORMS = {
     ### custom Finetuning datasets
     "custom_finetuning": identity_transform,
     "rlbench": rlbench_transform_next,
+    "metaworld": metaworld_transform_next,
     "rtx_dataset": rtx_transform_next,
 }

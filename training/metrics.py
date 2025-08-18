@@ -246,8 +246,10 @@ class VLAMetrics:
             "loss": deque(maxlen=window_size),
             "step_time": deque(maxlen=window_size),
             "lr": [],
-            "ar_loss": deque(maxlen=window_size),  # 新增 ar_loss
-            "diff_loss": deque(maxlen=window_size),  # 新增 diff_loss
+            "contrastive_loss": deque(maxlen=window_size),  
+            "diff_loss": deque(maxlen=window_size),  
+            "image_recon_loss": deque(maxlen=window_size),  
+            "point_cloud_recon_loss": deque(maxlen=window_size),  
         }
 
         # Created metrics buffers for individual tracked datasets
@@ -299,10 +301,14 @@ class VLAMetrics:
                 loss_val = value.detach()
                 self.state["loss_raw"].append(loss_val)
                 self.state["loss"].append(loss_val)
-            elif key == "ar_loss":  # 处理 ar_loss
-                self.state["ar_loss"].append(value.detach())
-            elif key == "diff_loss":  # 处理 diff_loss
+            elif key == "contrastive_loss":  
+                self.state["contrastive_loss"].append(value.detach())
+            elif key == "diff_loss":  
                 self.state["diff_loss"].append(value.detach())
+            elif key == "image_recon_loss":  
+                self.state["image_recon_loss"].append(value.detach())
+            elif key == "point_cloud_recon_loss":  
+                self.state["point_cloud_recon_loss"].append(value.detach())
             else:
                 self.state[key].append(value.detach())
 
@@ -315,8 +321,10 @@ class VLAMetrics:
         loss_raw = torch.stack(list(self.state["loss_raw"])).mean().item()
         loss = torch.stack(list(self.state["loss"])).mean().item()
         step_time, lr = np.mean(list(self.state["step_time"])), self.state["lr"][-1]
-        ar_loss = torch.stack(list(self.state["ar_loss"])).mean().item()  # 计算 ar_loss 的平均值
-        diff_loss = torch.stack(list(self.state["diff_loss"])).mean().item()  # 计算 diff_loss 的平均值
+        contrastive_loss = torch.stack(list(self.state["contrastive_loss"])).mean().item() 
+        diff_loss = torch.stack(list(self.state["diff_loss"])).mean().item() 
+        image_recon_loss = torch.stack(list(self.state["image_recon_loss"])).mean().item() 
+        point_cloud_recon_loss = torch.stack(list(self.state["point_cloud_recon_loss"])).mean().item() 
         status = self.get_status(loss)
 
         # Fire to Trackers
@@ -330,8 +338,10 @@ class VLAMetrics:
                 f"{prefix}/Loss (Raw)": loss_raw,
                 f"{prefix}/Learning Rate": lr,
                 f"{prefix}/Step Time": step_time,
-                f"{prefix}/AR Loss": ar_loss,  # 记录 ar_loss
-                f"{prefix}/Diff Loss": diff_loss,  # 记录 diff_loss
+                f"{prefix}/Contrastive Loss": contrastive_loss,  
+                f"{prefix}/Diff Loss": diff_loss,  
+                f"{prefix}/Img Recon Loss": image_recon_loss,  
+                f"{prefix}/PC Recon Loss": point_cloud_recon_loss,  
             },
         )
         return status

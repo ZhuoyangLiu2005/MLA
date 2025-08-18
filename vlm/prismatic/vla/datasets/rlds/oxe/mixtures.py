@@ -9,13 +9,16 @@ from typing import Dict, List, Tuple
 
 # fmt: off
 OXE_NAMED_MIXTURES: Dict[str, List[Tuple[str, float]]] = {
-    # === Bridge V2 Dataset ===
     "rlbench": [
-         ("rlbench", 1.0),                                   # Original Version of Bridge V2 from Project Website
+         ("rlbench", 1.0),                                 
+    ],
+    "metaworld": [
+         ("metaworld", 1.0),                                
     ],
     "rtx_dataset": [
-         ("rtx_dataset", 1.0),                                   # Original Version of Bridge V2 from Project Website
+         ("rtx_dataset", 1.0),                              
     ],
+    
     # === [Moderate-Scale] Bridge++ Mixtures ===
     "bridge_rt_1": [
         ("bridge_orig", 1.0),                                   # Original Version of Bridge V2 from Project Website

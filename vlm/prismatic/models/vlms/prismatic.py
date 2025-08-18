@@ -33,7 +33,8 @@ from prismatic.util.nn_utils import FusedMLPProjector, LinearProjector, MLPProje
 
 from prismatic.models.eve_tokenizer.vision_tokenizer import VisionTokenizer
 from prismatic.models.eve_tokenizer.vision_tokenizer import MLP_GELU
-from prismatic.models.fuser.contrastive import project_3d_to_2d, project_3d_to_2d_672_pyrep_compatible
+from prismatic.models.fuser.contrastive import project_3d_to_2d_672_rlbench, project_3d_to_2d_672_metaworld
+from prismatic.models.fuser.camera import get_camera_params
 from prismatic.a2pmodels.backbone.pointvit import PointViT
 from prismatic.models.reconstruction.models import MultimodalReconstructionManager
 from prismatic.models.reconstruction.utils import images_to_patches, patches_to_images, dilate_mask, create_roi_mask_from_indices
@@ -92,7 +93,6 @@ def save_projection_visualization(
     ax1.grid(color='gray', linestyle=':', alpha=0.5)
     
     if rgb_image is not None:
-        print(rgb_image)
         if rgb_image.shape[:2] == (H, W):
             ax1.imshow(rgb_image.astype(np.float32), 
                       extent=[0, W, H, 0], 
@@ -173,6 +173,7 @@ class PrismaticVLM(VLM):
         use_diff = False,
         # === Contrastive Parameters ===
         use_pointcloud: bool = False,
+        use_contrastive: bool = False,
         llm_vision_layers: int = 1,
         # === Reconstruction Parameters ===
         use_reconstruction: bool = True,
@@ -200,6 +201,7 @@ class PrismaticVLM(VLM):
         self.token_size = token_size
         self.use_diff = use_diff
         self.use_pointcloud = use_pointcloud
+        self.use_contrastive = use_contrastive
         self.llm_vision_layers = llm_vision_layers
         
         # === Reconstruction Configuration ===
@@ -354,6 +356,7 @@ class PrismaticVLM(VLM):
         enable_mixed_precision_training: bool = True,
         freeze_weights: bool = True,
         class_dropout_prob: float = 0.0,
+        action_dim: int = 7,
         use_diff: bool = False,
         use_pointcloud: bool = False,
         use_reconstruction: bool = False,
@@ -367,6 +370,7 @@ class PrismaticVLM(VLM):
             llm_backbone,
             enable_mixed_precision_training=enable_mixed_precision_training,
             class_dropout_prob=class_dropout_prob,
+            action_dim=action_dim,
             use_diff=use_diff,
             use_pointcloud=use_pointcloud,
             use_reconstruction=use_reconstruction,
@@ -627,19 +631,7 @@ class PrismaticVLM(VLM):
     def get_fused_tokens(
         self, images, pointcloud
     ):
-        camera_params = {
-            "K": torch.tensor([
-                [-307.7174807,    0.0,         112.0],
-                [   0.0,        -307.7174807,  112.0],
-                [   0.0,           0.0,          1.0]
-            ], dtype=torch.float32),
-            "R": torch.tensor([
-                [ 1.19209290e-07, -4.22617942e-01, -9.06307936e-01],
-                [-1.00000000e+00, -5.96046448e-07,  1.49011612e-07],
-                [-5.66244125e-07,  9.06307936e-01, -4.22617912e-01]
-            ], dtype=torch.float32),
-            "t": torch.tensor([1.34999919e+00, 3.71546562e-08, 1.57999933e+00], dtype=torch.float32)
-        }
+        camera_params = get_camera_params("rlbench_front", device=images.device if pointcloud is None else pointcloud.device)
         # 2D tokens
         projected_image_tokens, patch_hw = self.encode_images(images)
         projected_image_tokens = torch.stack(projected_image_tokens, dim=0)
@@ -647,14 +639,25 @@ class PrismaticVLM(VLM):
         if self.use_pointcloud and pointcloud is not None:
             pointcloud_patch_embeddings, pointcloud_centers = self.vision_tower_3d(pointcloud)
             projected_pointcloud_tokens = self.projector_3d(pointcloud_patch_embeddings)  
-            patch_indices, valid_mask = project_3d_to_2d_672_pyrep_compatible(
+            patch_indices, valid_mask = project_3d_to_2d_672_rlbench(
                 pointcloud_centers, 
-                camera_params['K'].to(pointcloud_centers.device),
-                camera_params['R'].to(pointcloud_centers.device),
-                camera_params['t'].to(pointcloud_centers.device),
+                camera_params.K,
+                camera_params.R,
+                camera_params.t,
                 image_size_resize=(672, 672),
                 vision_strides={'patch_stride': 14, 'conv_stride': 3}
             )
+            # patch_indices, valid_mask = project_3d_to_2d_672_metaworld(
+            #     pointcloud_centers, 
+            #     camera_params.K,
+            #     camera_params.R,
+            #     camera_params.t,
+            #     "corner",
+            #     image_size_resize=(672, 672),
+            #     vision_strides={'patch_stride': 14, 'conv_stride': 3}
+            # )
+            # print(patch_indices)
+            # input()
         else:
             B = projected_image_tokens.shape[0]  
             N_pc = projected_image_tokens.shape[1]  
@@ -684,7 +687,7 @@ class PrismaticVLM(VLM):
         #     pointcloud_centers, 
         #     patch_indices, 
         #     valid_mask, 
-        #     save_dir="/media/liuzhuoyang/new_vla/5D_VLA_beta/vis", 
+        #     save_dir="/media/liuzhuoyang/new_vla/Rec_Diff_beta/LLM_policy/vis", 
         #     rgb_image=images,
         # )
         # input("Press Enter to continue...")
@@ -696,6 +699,9 @@ class PrismaticVLM(VLM):
             [projected_pointcloud_tokens, projected_image_tokens], 
             dim=1
         )
+        # print(projected_fused_tokens)
+        # print(projected_fused_tokens.shape)
+        # input()
 
         return projected_fused_tokens, patch_indices, valid_mask
     
@@ -708,6 +714,7 @@ class PrismaticVLM(VLM):
         losses = {}
         total_loss = 0.0
         if self.recon_image and next_images is not None and 'image_reconstruction' in reconstruction_outputs:
+            image_recon_loss_total = 0.0
             reconstructed_patches = reconstruction_outputs['image_reconstruction']  # [B,256, patch_dim]
             reconstruction_roi_mask = reconstruction_outputs['reconstruction_roi_mask']  # [B,256] bool
             next_images_patches = images_to_patches(next_images, self.reconstruction_manager.image_recon_module.image_patch_size)  # [B,256,patch_dim]
@@ -722,6 +729,7 @@ class PrismaticVLM(VLM):
                 image_recon_loss = recon_mse + 0.5 * recon_l1
                 losses['image_roi_reconstruction_loss'] = image_recon_loss
                 total_loss = total_loss + image_recon_loss
+                image_recon_loss_total = image_recon_loss_total + image_recon_loss
 
             # background consistency loss
             bg_mask = ~reconstruction_roi_mask
@@ -731,6 +739,7 @@ class PrismaticVLM(VLM):
                 bg_l1 = F.l1_loss(pred_bg, gt_bg)
                 losses['bg_consistency_loss'] = 0.01 * bg_l1
                 total_loss = total_loss + losses['bg_consistency_loss']
+                image_recon_loss_total = image_recon_loss_total + losses['bg_consistency_loss']
             
             # delta regularization loss
             if 'delta_all' in reconstruction_outputs:
@@ -739,6 +748,8 @@ class PrismaticVLM(VLM):
                 delta_loss = -0.1 * delta_norm  
                 losses['delta_magnitude_reward'] = delta_loss
                 total_loss = total_loss + delta_loss
+                image_recon_loss_total = image_recon_loss_total + delta_loss
+            losses['image_recon_loss'] = image_recon_loss_total
 
         if self.recon_pointcloud and next_point_cloud is not None and 'pointcloud_coord_reconstruction' in reconstruction_outputs:
             # Extract coordinates from ground truth
@@ -746,8 +757,7 @@ class PrismaticVLM(VLM):
 
             pc_coord_pred = reconstruction_outputs['pointcloud_coord_reconstruction']
             pc_coord_loss = chamfer_distance_l2(pc_coord_pred, next_point_cloud) 
-            # pc_coord_loss = earth_movers_distance(pc_coord_pred, next_point_cloud) 
-            losses['pointcloud_coord_loss'] = pc_coord_loss
+            losses['point_cloud_recon_loss'] = pc_coord_loss
             total_loss += pc_coord_loss
 
         losses['total_reconstruction_loss'] = total_loss
@@ -837,8 +847,6 @@ class PrismaticVLM(VLM):
             return output, None
         
         # get image and point_cloud embeddings
-        # if self.use_pointcloud:
-        #     point_cloud = point_cloud.to(self.device) 
         projected_fused_embeddings, patch_indices, valid_mask= self.get_fused_tokens(images, point_cloud) 
         input_embeddings = self.llm_backbone.embed_input_ids(input_ids)
         
@@ -968,14 +976,14 @@ class PrismaticVLM(VLM):
             img_token_indices=(img_tokens_start_idx, img_tokens_end_idx),
             patch_correspondence_indices=patch_indices,
             correspondence_valid_mask=valid_mask,
-            compute_token_contrastive_loss=False, 
+            compute_token_contrastive_loss=self.use_contrastive, 
         )
         
         # === Reconstruction Forward Pass ===
         reconstruction_outputs = {}
         reconstruction_losses = {}
         
-        if self.use_reconstruction and self.training and output.hidden_states is not None:
+        if self.use_reconstruction and (self.recon_image or self.recon_pointcloud) and self.training and output.hidden_states is not None:
             # Use the last layer hidden states for reconstruction
             llm_hidden_states = output.hidden_states[-1]  # [B, seq_len, hidden_dim]
             current_images_patches = None
@@ -1025,13 +1033,13 @@ class PrismaticVLM(VLM):
             
             noise_pred = torch.cat(noise_pred, dim=0)
             
-            # # Return with reconstruction information
+            # Return with reconstruction information
             if self.training:
                 visualize_reconstruction_simple(
                     reconstruction_outputs, 
                     next_images,
                     next_point_cloud,
-                    "/media/liuzhuoyang/new_vla/Rec_Diff_beta/LLM_policy/vis/recon_vis_3dpointmae1"
+                    "/media/liuzhuoyang/new_vla/Rec_Diff_beta/LLM_policy/vis/recon_vis_pretrain-0818"
                 )
                 # visualize_reconstruction_rgb(
                 #     reconstruction_outputs, 
@@ -1044,7 +1052,7 @@ class PrismaticVLM(VLM):
                 return output, noise_pred
         
         # # Return with reconstruction information
-        if self.use_reconstruction and self.training:
+        if self.use_reconstruction and (self.recon_image or self.recon_pointcloud) and self.training:
             return output, reconstruction_outputs, reconstruction_losses
         else:
             return output # autoregressive

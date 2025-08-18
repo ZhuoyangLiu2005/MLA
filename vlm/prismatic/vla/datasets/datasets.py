@@ -186,22 +186,23 @@ class RLDSDataset(IterableDataset):
     ) -> None:
         """Lightweight wrapper around RLDS TFDS Pipeline for use with PyTorch/OpenVLA Data Loaders."""
         self.data_root_dir, self.data_mix, self.batch_transform = data_root_dir, data_mix, batch_transform
-
+        
         # Configure RLDS Dataset(s)
         if self.data_mix in OXE_NAMED_MIXTURES:
             mixture_spec = OXE_NAMED_MIXTURES[self.data_mix]
         else:
             # Assume that passed "mixture" name is actually a single dataset -- create single-dataset "mix"
             mixture_spec = [(self.data_mix, 1.0)]
-
+            
         # fmt: off
         per_dataset_kwargs, weights = get_oxe_dataset_kwargs_and_weights(
             self.data_root_dir,
             mixture_spec,
-            load_camera_views=("primary","next_primary"), # "primary", "wrist", "secondary"
+            load_camera_views=("primary", "next_primary"), # "primary", "wrist", "secondary"
             load_depth=False,
             load_proprio=False,
             load_language=True,
+            load_pointcloud=use_pointcloud,
             action_proprio_normalization_type=NormalizationType.BOUNDS_Q99,
         )
         rlds_config = dict(
@@ -209,7 +210,7 @@ class RLDSDataset(IterableDataset):
                 window_size=past_action_window_size + 1,                                    # If we wanted to feed / predict more than one step
                 future_action_window_size=future_action_window_size,                        # For action chunking
                 skip_unlabeled=True,                                                        # Skip trajectories without language labels
-                #goal_relabeling_strategy="uniform",                                        # Goals are currently unused
+                # goal_relabeling_strategy="uniform",                                        # Goals are currently unused
             ),
             frame_transform_kwargs=dict(
                 resize_size=resize_resolution,
@@ -223,7 +224,6 @@ class RLDSDataset(IterableDataset):
             traj_read_threads=len(mixture_spec),
             train=train,
             load_all_data_for_training=load_all_data_for_training,
-            use_pointcloud=use_pointcloud,
         )
 
         # If applicable, enable image augmentations

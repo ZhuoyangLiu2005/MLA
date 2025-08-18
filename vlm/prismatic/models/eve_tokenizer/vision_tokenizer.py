@@ -128,54 +128,26 @@ class MLP_GELU(nn.Module):
         return self.mlp(x)
 
 
-class VisionTokenizer_0626(nn.Module):
-    def __init__(self, input_size, vision_tower_name, patch_stride=14):
-        super().__init__()
-        self.half_precision_dtype = torch.float16  # 添加半精度数据类型属性
-        self.is_loaded = True
-        self.hidden_size = input_size
-        self.image_processor = CLIPImageProcessor.from_pretrained(vision_tower_name,
-                                                            size={"shortest_edge": 224},  # 或 {"height": 224, "width": 224}
-                                                            crop_size={"height": 224, "width": 224},
-                                                        )
-        
-        self.patch_stride = patch_stride
-        self.patch_embedding = nn.Conv2d(3, input_size, kernel_size=patch_stride, stride=patch_stride, bias=False)
-
-    def forward(self, pixel_values, modules):
-        patch_embeds = self.patch_embedding(pixel_values.to(dtype=self.dtype))
-        patch_embeds_, patch_hw_ = [], []
-        for i in range(patch_embeds.shape[0]):
-            patch_embed = patch_embeds[i] 
-            h, w = patch_embed.shape[1:]
-
-            patch_embed = patch_embed.transpose(-2, -1).reshape(-1, h, w)
-            patch_embed = patch_embed.flatten(1).transpose(0, 1)
-            
-            patch_embeds_.append(modules(patch_embed)) 
-            patch_hw_.append(torch.LongTensor([h, w]).to(self.device))
-
-        return patch_embeds_, patch_hw_
-    
-    @property
-    def dtype(self):
-        return self.patch_embedding.weight.dtype
-
-    @property
-    def device(self):
-        return self.patch_embedding.weight.device
-
-
 class VisionTokenizer(nn.Module):
     def __init__(self, input_size, vision_tower_name):
         super().__init__()
-        self.half_precision_dtype = torch.float16  # 添加半精度数据类型属性
+        self.half_precision_dtype = torch.float16  
         self.is_loaded = True
         self.hidden_size = input_size
-        self.image_processor = CLIPImageProcessor.from_pretrained(vision_tower_name)
+        # self.image_processor = CLIPImageProcessor.from_pretrained(vision_tower_name)
+        self.image_processor = CLIPImageProcessor(
+            do_resize=True,
+            size=672,
+            do_center_crop=True,
+            crop_size=672,
+            do_normalize=True,  
+            do_rescale=True,    
+        )
 
-        patch_stride, conv_stride = self.image_processor.patch_stride, self.image_processor.conv_stride
-        self.patch_stride, self.conv_stride = patch_stride, 3
+        # patch_stride, conv_stride = self.image_processor.patch_stride, self.image_processor.conv_stride
+        patch_stride = 14
+        self.patch_stride = patch_stride
+        self.conv_stride = 3
 
         self.patch_embedding = nn.Conv2d(3, input_size, kernel_size=patch_stride, stride=patch_stride, bias=False)
         self.class_embedding = nn.Parameter(torch.randn(input_size))

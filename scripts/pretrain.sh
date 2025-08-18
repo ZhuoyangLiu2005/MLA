@@ -29,13 +29,14 @@ REPEATED_DIFFUSION_STEPS=4
 CLASS_DROPOUT_PROB=0.0
 PRETRAIN=openvla
 USE_POINTCLOUD=false
+USE_CONTRASTIVE=false
 LLM_VISION_LAYERS=8
-USE_REC=true
-RECON_IMG=true
+USE_REC=false
+RECON_IMG=false
 USE_ROI=false
 RECON_PC=false
 
-SETTING=Pretrain${PRETRAIN}_FreezeVis${FREEZE_VISON}_Window${FUTURE_ACTION_STEPS}_Diff${USE_DIFF}_Rec${USE_REC}3dpointmae_Contrastive_Vislayer${LLM_VISION_LAYERS}_1024_0403_0812
+SETTING=Pretrain${PRETRAIN}_FreezeVis${FREEZE_VISON}_Window${FUTURE_ACTION_STEPS}_Diff${USE_DIFF}_Rec${USE_REC}2d_Contrastive_Vislayer${LLM_VISION_LAYERS}_1024_0403_0818
 
 TASK=rtx_0812
 BATCH_SIZE=8
@@ -43,9 +44,9 @@ EPOCHS=10
 LEARNING_RATE=2e-5
 
 NUM_GPUS=8
-NODES=5
+NODES=4
 MASTER_ADDR="10.200.64.126" # 122: 10.200.64.219, 241: 10.200.64.126
-NODE_RANK=4
+NODE_RANK=3
 LOG_DIR="/media/liuzhuoyang/new_vla/Rec_Diff_beta/pretrain-exp/exp_${TASK}_${SETTING}/logs_pretrain"
 mkdir -p $LOG_DIR
 if [ $NODE_RANK -eq 0 ]; then
@@ -82,6 +83,7 @@ torchrun --nnodes $NODES --nproc-per-node $NUM_GPUS --node_rank=$NODE_RANK --mas
   --class_dropout_prob ${CLASS_DROPOUT_PROB} \
   --use_diff ${USE_DIFF} \
   --use_pointcloud ${USE_POINTCLOUD} \
+  --use_contrastive ${USE_CONTRASTIVE} \
   --use_reconstruction ${USE_REC} \
   --recon_image ${RECON_IMG} \
   --use_roi ${USE_ROI} \
