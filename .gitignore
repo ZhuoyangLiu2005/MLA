@@ -1,0 +1,10 @@
+
+
+__pycache__/
+
+*.log
+*.tmp
+*.swp
+
+recon_vis/
+vis/
