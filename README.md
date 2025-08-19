@@ -1,223 +1,161 @@
-# CogACT: A Foundational Vision-Language-Action Model for Synergizing Cognition and Action in Robotic Manipulation
-### 🚩[Project Page](https://cogact.github.io/) | 📑[Paper](https://arxiv.org/abs/2411.19650) | 🤗[Models](https://huggingface.co/CogACT)
+# LLM-Policy
 
+## Fine-tuning on custom datasets (beta)
 
-This is the code for CogACT: A Foundational Vision-Language-Action Model for Synergizing Cognition and Action in Robotic Manipulation.
+We applied the policy on RLbench and Metaworld benchmark. And it's convenient to finetune on these datasets.
 
-## Contents
- * [**Installation**](#installation)
- * [**Getting Started**](#getting-started)
- * [**Fully Fine-Tuning**](#fully-fine-tuning)
- * [**Training CogACT from Scratch**](#training-cogact-from-scratch)
- * [**Evaluation in SIMPLER**](#evaluation-in-simpler)
+For RLBench and Metaworld, you should firstly generate the training dataset in RLDS dataset form. And custom the keys which match those in LLM_policy/vlm/prismatic/vla/datasets/rlds/oxe/configs.py`
 
-## Installation
-The code is built using Python 3.10, and can be run under any environment with Python 3.8 and above. We require PyTorch >= 2.2.0 and CUDA >= 12.0 (It may run with lower versions, but we have not tested it).
-
-We recommend using [Miniconda](https://docs.conda.io/en/latest/miniconda.html) and setting up an environment:
-
-    conda create --name cogact python=3.10
-
-Next, clone our repo and install the required packages:
-
-    git clone https://github.com/microsoft/CogACT
-    cd CogACT
-    pip install -e .
-
-If you need to use the traning code, please also install the [Flash Attention](https://github.com/Dao-AILab/flash-attention):
-
-    # Training additionally requires Flash-Attention 2 (https://github.com/Dao-AILab/flash-attention)
-    pip install packaging ninja
-
-    # Verify Ninja --> should return exit code "0"
-    ninja --version; echo $?
-
-    # Install Flash Attention 2
-    # =>> If you run into difficulty, try `pip cache remove flash_attn` first
-    pip install "flash-attn==2.5.5" --no-build-isolation
-## Getting Started
-We release three CogACT models with different model sizes, including [Small](https://huggingface.co/CogACT/CogACT-Small), [Base](https://huggingface.co/CogACT/CogACT-Base) and [Large](https://huggingface.co/CogACT/CogACT-Large). Checkpoints, configs, and model cards are availabel on [Hugging Face page](https://huggingface.co/CogACT). Refer to the code below for the minimal inference:
-
-    from PIL import Image
-    from vla import load_vla
-    import torch
-
-    model = load_vla(
-          'CogACT/CogACT-Base',                 # choose from [CogACT-Small, CogACT-Base, CogACT-Large] or the local path
-          load_for_training=False, 
-          action_model_type='DiT-B',              # choose from ['DiT-S', 'DiT-B', 'DiT-L'] to match the model weight
-          future_action_window_size=15,
-        )                                 
-    # about 30G Memory in fp32; 
-    
-    # (Optional) use "model.vlm = model.vlm.to(torch.bfloat16)" to load vlm in bf16
-    
-    model.to('cuda:0').eval()
-
-    image: Image.Image = <input_your_image>     
-    prompt = "move sponge near apple"           # input your prompt
-    
-    # Predict Action (7-DoF; un-normalize for RT-1 google robot data, i.e., fractal20220817_data)
-    actions, _ = model.predict_action(
-              image,
-              prompt,
-              unnorm_key='fractal20220817_data', # input your unnorm_key of the dataset
-              cfg_scale = 1.5,                   # cfg from 1.5 to 7 also performs well
-              use_ddim = True,                   # use DDIM sampling
-              num_ddim_steps = 10,               # number of steps for DDIM sampling
-            )
-
-    # results in 7-DoF actions of 16 steps with shape [16, 7]
-
-Alternatively, you can use batch inference function ``predict_action_batch`` from [vla/cogactvla.py](./vla/cogactvla.py) to accelerate inference in the simulator. For our ``Adaptive Action Ensemble`` strategy, please refer to [adaptive_ensemble.py](./evaluation/adaptive_ensemble.py).
-
-## Fully Fine-Tuning
-To fully fine-tune the pretrained models, we use PyTorch Fully Sharded Data Parallel ([FSDP](https://pytorch.org/tutorials/intermediate/FSDP_tutorial.html)). The training script used is from [Prismatic VLMs](https://github.com/TRI-ML/prismatic-vlms).
-We recommend using fully finetune on your dataset instead of LoRA, because the model with fully finetuning performs better in a shorter training time. Empirically. Fully finetuning the pretrained model for around 30 epochs already yields good results. Pretrained models can be download from our [Hugging Face page](https://huggingface.co/CogACT/CogACT-Base) or by passing the model_id to the training scripts for automatic download.
-
-**Download from our [Hugging Face page](https://huggingface.co/CogACT/CogACT-Base), using CogACT-Base for an example. (Optional)**
-
-    # Change directory to your base model PATH
-    cd <your_base_model_path>
-
-    # Make sure you have git-lfs installed (https://git-lfs.com)
-    git lfs install
-
-    # Download checkpoint (30 GB)
-    git clone https://huggingface.co/CogACT/CogACT-Base
-
-You can also pass the model_id (e.g., `CogACT/CogACT-Base`) to the training scripts for automatic download. (Seeing below)
-
-Next, create a [Hugging Face user access token](https://huggingface.co/docs/hub/en/security-tokens) and export the token value.
+Then you can fine-tune the model on these datasets:
 
 ```bash
-# export the HuggingFace user access token token
-export HF_TOKEN = hf_..
+# rlbench
+bash LLM_policy/scripts/train_rlbench.sh
+# metaworld
+bash LLM_policy/scripts/train_metaworld.sh
 ```
 
-Then launch the training script. We use one node with 8 A100 GPUs as an example.
+Take `LLM_policy/scripts/train_rlbench.sh` as an example:
+
 ```bash
-torchrun --standalone --nnodes 1 --nproc-per-node 8 scripts/train.py \
-  --pretrained_checkpoint <model_id/local_path_to_model,e.g,"CogACT/CogACT-Base"> \
-  --vla.type prism-dinosiglip-224px+oxe+diffusion \
-  --vla.data_mix <data_mix_option,e.g,"bridge"> \
-  --vla.expected_world_size 8 \
-  --vla.global_batch_size 256 \
-  --vla.per_device_batch_size 32 \
-  --vla.learning_rate 2e-5 \
-  --data_root_dir <path_to_dataset_dir> \
-  --run_root_dir <path_to_log/checkpoint_dir> \                 
-  --run_id <optional_run_id_for_wandb> \
-  --image_aug <True_or_False> \
-  --wandb_project <your_wandb_project> \
-  --wandb_entity <your_wandb_entity> \
-  --save_interval <num_of_steps_to_save_checkpoint> \
-  --repeated_diffusion_steps 8 \
-  --future_action_window_size 15 \
-  --action_model_type DiT-B \
-  --is_resume False
+cd /media/liuzhuoyang/new_vla/Rec_Diff_beta/LLM_policy
+
+export PYTHONPATH=/media/liuzhuoyang/new_vla/Rec_Diff_beta/LLM_policy:$PYTHONPATH
+export PYTHONPATH=/media/liuzhuoyang/new_vla/Rec_Diff_beta/LLM_policy/vlm:$PYTHONPATH
+export PYTHONPATH=/media/liuzhuoyang/new_vla/Rec_Diff_beta/LLM_policy/transformers:$PYTHONPATH
+
+export HF_HOME=/media/huggingface
+export HF_HUB_OFFLINE=1
+export TRANSFORMERS_OFFLINE=1
+export TIMM_OFFLINE=1
+
+# for debug
+
+export WANDB_MODE=offline
+
+# training settings
+
+FUTURE_ACTION_STEPS=0
+FREEZE_VISON=true
+FREEZE_LLM=false
+ACTION_TOKENIZER_EXIST=false
+USE_DIFF=true
+REPEATED_DIFFUSION_STEPS=4
+CLASS_DROPOUT_PROB=0.0
+PRETRAIN=pre0815
+USE_POINTCLOUD=true
+USE_CONTRASTIVE=true
+LLM_VISION_LAYERS=8
+USE_REC=false
+RECON_IMG=false
+USE_ROI=false
+RECON_PC=false
+
+SETTING=Pretrain${PRETRAIN}_FreezeVis${FREEZE_VISON}_Window${FUTURE_ACTION_STEPS}_Diff${USE_DIFF}_Rec${USE_REC}ALL_Contrastive_Vislayer${LLM_VISION_LAYERS}_1024_0403_0818
+
+TASK=6tasks_selected_keyframe_nextpc_0806
+BATCH_SIZE=8
+EPOCHS=300
+LEARNING_RATE=2e-5
+
+export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
+NUM_GPUS=8 # gpus per machine
+NODES=1
+MASTER_ADDR="10.200.64.222" # ifconfig
+NODE_RANK=0
+
+DATA_ROOT=/media/liuzhuoyang/data/rlbench/rlds
+EXP_ROOT=/media/liuzhuoyang/new_vla/Rec_Diff_beta/exp
+
+torchrun --standalone --nnodes ${NODES} --nproc-per-node ${NUM_GPUS} scripts/train.py
+--vla.type prism-dinosiglip-224px+oxe+diffusion
+--vla.data_mix rlbench
+--vla.base_vlm prism-dinosiglip-224px+7b
+--vla.expected_world_size $((${NUM_GPUS} * ${NODES}))
+--vla.per_device_batch_size ${BATCH_SIZE}
+--vla.global_batch_size $((${NUM_GPUS} * ${NODES} * ${BATCH_SIZE}))
+--vla.learning_rate ${LEARNING_RATE}
+--vla.epochs ${EPOCHS}
+--vla.freeze_vision_tower ${FREEZE_VISON}
+--vla.freeze_llm_backbone ${FREEZE_LLM}
+--data_root_dir ${DATA_ROOT}/${TASK}
+--run_root_dir ${EXP_ROOT}
+--run_id exp_${TASK}_${SETTING}
+--image_aug false
+--wandb_project one_model_vla_sft
+--wandb_entity liumail2023-peking-university
+--save_interval 100
+--action_dim 7
+--repeated_diffusion_steps ${REPEATED_DIFFUSION_STEPS}
+--action_tokenizer_exist ${ACTION_TOKENIZER_EXIST}
+--future_action_window_size ${FUTURE_ACTION_STEPS}
+--class_dropout_prob ${CLASS_DROPOUT_PROB}
+--use_diff ${USE_DIFF}
+--use_contrastive ${USE_CONTRASTIVE}
+--use_pointcloud ${USE_POINTCLOUD}
+--use_reconstruction ${USE_REC}
+--recon_image ${RECON_IMG}
+--use_roi ${USE_ROI}
+--recon_pointcloud ${RECON_PC}
+--is_resume False
+--pretrained_checkpoint "`/media/huggingface/hub/models--openvla--openvla-7b/snapshots/31f090d05236101ebfc381b61c674dd4746d4ce0`"
 ```
-More customized training settings and changes can be made in [`conf/vla.py`](conf/vla.py) by modifying and registering a new VLA type. If you want to resume from a checkpoint instead of starting training from scratch, please set `is_resume=True`. Note that you also need to set `--resume_step` and `--resume_epoch` to match the checkpoint, and the optimizer in the checkpoint also needs to be loaded.
 
-To finetune on datasets belong to [Open X-Embodiment (OXE)](https://robotics-transformer-x.github.io/), you can download them from [OXE](https://robotics-transformer-x.github.io/) and change the ``vla.data_mix`` to the corresponding name. To finetune on your own customized data, please follow the instruction [(rlds_dataset_builder)](https://github.com/kpertsch/rlds_dataset_builder) for converting your data to RLDS format. The actions should be the deltas of end effector ``EEF Delta XYZ (3) + Roll-Pitch-Yaw (3) + Gripper Open/Close (1)``. Once your customized data is ready, place the customized data directly under the ``<data_root_dir>/custom_finetuning/1.0.0`` directory. Then set ``vla.data_mix="custom_finetuning"``.
+The hyperparameters can be set as follows:
 
-## Training CogACT from Scratch
+|                              |pretrain|ft-stage1| ft-stage2 | 
+|:-----------|:-----------:|:-----------:|:-----------:|
+| use_pointcloud  | false | true | false |
+| use_contrastive  | false | true | true |
+| use_rec                | false | false | true |
+| recon_img           | false | false | true |
+| use_roi                 | false | false | true/false |
+| recon_pc              | false | false | true |
+
+
+## Evaluation (beta)
+
+Run the following scripts to evaluate on the RLBench benchmark:
+
+```bash
+bash LLM_policy/scripts/test_rlbench.sh
+```
+
+If the model is trained with point cloud, set the argument `use_pointcloud=1`
+
+For Metaworld benchmark, run the script below:
+
+```bash
+bash LLM_policy/scripts/test_metaworld.sh
+```
+
+## Pre-Training on RTX-dataset (beta)
+
 You can start the trainging from the weights of [OpenVLA](https://github.com/openvla/openvla) for greater efficiency. Please follow the instruction of [OpenVLA](https://github.com/openvla/openvla) to download their weights:
 
-    # From OpenVLA repo
-    # Change directory to your base model checkpoints folder
-    cd <PATH TO BASE MODEL CHECKPOINTS DIR>
+```
+# From OpenVLA repo
+# Change directory to your base model checkpoints folder
+cd <PATH TO BASE MODEL CHECKPOINTS DIR>
+# Download checkpoint (30 GB) -- may take a few minutes
+git clone git@hf.co:openvla/openvla-7b-prismatic
+# If the command above did not download the full checkpoint,
+# manually fetch it via git Large File Storage (LFS)
+# Note: You may have to configure an SSH key for this to work
+cd openvla-7b-prismatic
+git lfs fetch --all
+```
 
-    # Download checkpoint (30 GB) -- may take a few minutes
-    git clone git@hf.co:openvla/openvla-7b-prismatic
 
-    # If the command above did not download the full checkpoint,
-    # manually fetch it via git Large File Storage (LFS)
-    # Note: You may have to configure an SSH key for this to work
-    cd openvla-7b-prismatic
-    git lfs fetch --all
-
-The data of [Open X-Embodiment (OXE)](https://robotics-transformer-x.github.io/) can be download following [OXE](https://robotics-transformer-x.github.io/) and [OpenVLA](https://github.com/openvla/openvla). Then launch the training script. We use one node with 8 A100 GPUs as an example.
+The data of [Open X-Embodiment (OXE)](https://robotics-transformer-x.github.io/) can be download following [OXE](https://robotics-transformer-x.github.io/) and [OpenVLA](https://github.com/openvla/openvla). Then launch the training script. We provide the following training scripts:
 
 ```bash
-torchrun --standalone --nnodes 1 --nproc-per-node 8 scripts/train.py \
-  --pretrained_checkpoint openvla-7b-prismatic/checkpoints/step-295000-epoch-40-loss=0.2200.pt \
-  --vla.type prism-dinosiglip-224px+oxe+diffusion \
-  --vla.data_mix oxe_magic_soup_plus_minus \
-  --vla.expected_world_size 8 \
-  --vla.global_batch_size 256 \
-  --vla.per_device_batch_size 32 \
-  --vla.learning_rate 2e-5 \
-  --data_root_dir <path_to_dataset_dir> \
-  --run_root_dir <path_to_log/checkpoint_dir> \                 
-  --run_id <optional_run_id_for_wandb> \
-  --image_aug <True_or_False> \
-  --wandb_project <your_wandb_project> \
-  --wandb_entity <your_wandb_entity> \
-  --save_interval <num_of_steps_to_save_checkpoint> \
-  --repeated_diffusion_steps 8 \
-  --future_action_window_size 15 \
-  --action_model_type DiT-B \
-  --is_resume False
+bash LLM_policy/scripts/pretrain.sh
 ```
+
 You can also start training from PrismaticVLM and simply ignore the ``--pretrained_checkpoint``. However, it will take longer to converge.
-
-## Evaluation in SIMPLER
-In this section, we provide a minimal evaluation for our models in [SIMPLER](https://simpler-env.github.io/). First, please follow the instruction of [SimplerEnv](https://github.com/simpler-env/SimplerEnv) to install the simulation environment. Next, add our [./sim_cogact](./sim_cogact) to [SimplerEnv/simpler_env/policies](https://github.com/simpler-env/SimplerEnv/tree/main/simpler_env/policies).
-```bash
-cp ./sim_cogact <your_path_to_simpler>/simpler_env/policies -r
-```
-Then add a new policy model in [SimplerEnv/simpler_env/main_inference.py](https://github.com/simpler-env/SimplerEnv/blob/main/simpler_env/main_inference.py) as below:
-
-    elif args.policy_model == "cogact":
-        from simpler_env.policies.sim_cogact import CogACTInference
-        assert args.ckpt_path is not None
-        model = CogACTInference(
-            saved_model_path=args.ckpt_path,  # e.g., CogACT/CogACT-Base
-            policy_setup=args.policy_setup,
-            action_scale=args.action_scale,
-            action_model_type='DiT-B',
-            cfg_scale=1.5                     # cfg from 1.5 to 7 also performs well
-        )
-After that, you can modify and launch the scripts in ``sim_cogact/scripts`` like:
-```bash
-cd <your_path_to_simpler>
-bash simpler_env/policies/sim_cogact/scripts/cogact_put_in_drawer_visual_matching.sh
-```
-## Citing
-If you find our work useful, please consider citing [our paper](https://cogact.github.io/CogACT_paper.pdf):
-
-```bibtex
-@article{li2024cogact,
-  title={CogACT: A Foundational Vision-Language-Action Model for Synergizing Cognition and Action in Robotic Manipulation},
-  author={Li, Qixiu and Liang, Yaobo and Wang, Zeyu and Luo, Lin and Chen, Xi and Liao, Mozheng and Wei, Fangyun and Deng, Yu and Xu, Sicheng and Zhang, Yizhong and others},
-  journal={arXiv preprint arXiv:2411.19650},
-  year={2024}
-}
-```
-
-## Contributing
-
-This project welcomes contributions and suggestions.  Most contributions require you to agree to a
-Contributor License Agreement (CLA) declaring that you have the right to, and actually do, grant us
-the rights to use your contribution. For details, visit https://cla.opensource.microsoft.com.
-
-When you submit a pull request, a CLA bot will automatically determine whether you need to provide
-a CLA and decorate the PR appropriately (e.g., status check, comment). Simply follow the instructions
-provided by the bot. You will only need to do this once across all repos using our CLA.
-
-This project has adopted the [Microsoft Open Source Code of Conduct](https://opensource.microsoft.com/codeofconduct/).
-For more information see the [Code of Conduct FAQ](https://opensource.microsoft.com/codeofconduct/faq/) or
-contact [opencode@microsoft.com](mailto:opencode@microsoft.com) with any additional questions or comments.
-
-## Trademarks
-
-This project may contain trademarks or logos for projects, products, or services. Authorized use of Microsoft 
-trademarks or logos is subject to and must follow 
-[Microsoft's Trademark & Brand Guidelines](https://www.microsoft.com/en-us/legal/intellectualproperty/trademarks/usage/general).
-Use of Microsoft trademarks or logos in modified versions of this project must not cause confusion or imply Microsoft sponsorship.
-Any use of third-party trademarks or logos are subject to those third-party's policies.
 
 ## License
 
 All the code, model weights, and data are licensed under [MIT license](./LICENSE).
+
