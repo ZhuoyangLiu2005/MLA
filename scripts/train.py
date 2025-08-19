@@ -221,7 +221,7 @@ def train(cfg: TrainConfig) -> None:
                         recon_pointcloud=cfg.recon_pointcloud,
                         llm_vision_layers=cfg.llm_vision_layers,
                     )
-    elif cfg.pretrained_checkpoint is not None and 'openvla' in cfg.pretrained_checkpoint:
+    elif cfg.pretrained_checkpoint is not None and 'openvla' in cfg.pretrained_checkpoint and 'Pretrainopenvla' not in cfg.pretrained_checkpoint:
         vlm = load_openvla(cfg.pretrained_checkpoint, 
                            hf_token=hf_token, 
                            load_for_training=True, 

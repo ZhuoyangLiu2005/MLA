@@ -25,7 +25,7 @@ from lift3d.helpers.common import Logger, set_seed
 def setup_logger(log_dir):
     log_filename = os.path.join(log_dir, "output.log")
     
-    logger = logging.getLogger("RLBenchLogger")
+    logger = logging.getLogger("MetaworldLogger")
     logger.setLevel(logging.INFO)
 
     console_handler = logging.StreamHandler(sys.stdout)
@@ -73,7 +73,7 @@ def model_predict(model, image, prompt, cur_robot_state=None, point_cloud=None):
             cur_robot_state = cur_robot_state,
             action_dim = 4,
         )
-    return [actions_diff]
+    return actions_diff
 
 def main(args):
     # Report the arguments
@@ -152,7 +152,7 @@ def main(args):
             obs_img = Image.fromarray(obs_img)
 
             actions_diff = model_predict(model, obs_img, description, obs_robot_state, obs_point_cloud)
-            action = actions_diff[0][0]
+            action = actions_diff[0]
 
             # logger.info("%d  : %s", step, action)
             obs_dict, reward, terminated, truncated, env_info = env.step(action)

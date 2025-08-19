@@ -17,10 +17,12 @@ N=0
 Xvfb :$N -screen 0 1024x768x24 &  
 export DISPLAY=:$N
 
-models=("/media/liuzhuoyang/new_vla/Rec_Diff_beta/exp/exp_metaworld_assembly_pointcloud_0814_PretrainDiff_300_FreezeVistrue_Window0_Difftrue_Recfalse_Contrastive_Vislayer8_1024_0403_0814/checkpoints/step-017000-epoch-100-loss=3.3380.pt")
-
-# tasks=("assembly" "button-press" "box-close" "drawer-open" "bin-picking" "dial-turn" "hammer" "hand-insert" "lever-pull#" "peg-unplug-side" "push-wall" "reach" "shelf-place" "sweep-into")
+models=("/media/liuzhuoyang/new_vla/Rec_Diff_beta/exp/exp_metaworld_assembly_pointcloud_0814_PretrainDiff_300_FreezeVistrue_Window0_Difftrue_Recfalse_Contrastivefalse_1024_0403_0818/checkpoints/step-006800-epoch-40-loss=0.0735.pt")
+  
 tasks=("assembly")
+# "assembly" "button-press" "box-close" "drawer-open" "bin-picking"
+# "dial-turn" "hammer" "hand-insert" "lever-pull#" "peg-unplug-side"
+# "push-wall" "reach" "shelf-place" "sweep-into"
 
 for model in "${models[@]}"; do
   exp_name=$(echo "$model" | awk -F'[/=]' '{print $(NF-1)}')
@@ -30,7 +32,7 @@ for model in "${models[@]}"; do
       --camera_name "corner" \
       --model_path ${model} \
       --task_name ${task} \
-      --save_dir /media/liuzhuoyang/new_vla/Rec_Diff_beta/metaworld/metaworld_test_0718/${exp_name} \
+      --save_dir /media/liuzhuoyang/new_vla/Rec_Diff_beta/metaworld/metaworld_test_0819/${exp_name} \
       --cuda ${CUDA} \
       --use_diff 1 \
       --use_robot_state 1 \
