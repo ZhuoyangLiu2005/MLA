@@ -18,8 +18,7 @@ bash LLM_policy/scripts/train_metaworld.sh
 Take `LLM_policy/scripts/train_rlbench.sh` as an example:
 
 ```bash
-...
-
+# ...
 # training settings
 
 USE_POINTCLOUD=true
@@ -30,6 +29,7 @@ RECON_IMG=false
 USE_ROI=false
 RECON_PC=false
 
+# ...
 
 ```
 
