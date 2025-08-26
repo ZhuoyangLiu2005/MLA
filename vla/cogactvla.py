@@ -30,9 +30,9 @@ from vlm.prismatic.overwatch import initialize_overwatch
 from vlm.prismatic.util.nn_utils import FusedMLPProjector, LinearProjector, MLPProjector
 from action_model import create_diffusion
 
-from vlm.prismatic.models.eve_tokenizer.vision_tokenizer import VisionTokenizer
-from vlm.prismatic.models.eve_tokenizer.vision_tokenizer import MLP_GELU
-from vlm.prismatic.a2pmodels.backbone.pointvit import PointViT
+from vlm.prismatic.models.image.vision_tokenizer import VisionTokenizer
+from vlm.prismatic.models.image.vision_tokenizer import MLP_GELU
+from vlm.prismatic.models.pointcloud.backbone.pointvit import PointViT
 
 from action_model.action_model import ActionModel
 from action_model.models import DiT
@@ -61,6 +61,7 @@ class CogACT(nn.Module):
         norm_stats: Dict[str, Dict[str, Dict[str, Dict[str, List[float]]]]] = None,
         use_diff: bool = False,
         use_pointcloud: bool = False,
+        use_tactile: bool = False,
         use_contrastive: bool = False,
         use_reconstruction: bool = False,
         recon_image: bool = False,
@@ -73,6 +74,7 @@ class CogACT(nn.Module):
 
         self.use_diff = use_diff
         self.use_pointcloud = use_pointcloud
+        self.use_tactile = use_tactile
         self.use_contrastive = use_contrastive
         self.use_reconstruction = use_reconstruction
         self.recon_image = recon_image
@@ -121,10 +123,12 @@ class CogACT(nn.Module):
         next_images: Optional[torch.FloatTensor] = None,
         point_cloud: Optional[torch.FloatTensor] = None,
         next_point_cloud: Optional[torch.FloatTensor] = None,
-        pixel_values: Optional[torch.FloatTensor] = None,
+        tactile_right: Optional[torch.FloatTensor] = None,
+        tactile_left: Optional[torch.FloatTensor] = None,
         labels: Optional[torch.LongTensor] = None,
         actions: Optional[torch.FloatTensor] = None,
         proprio: Optional[torch.FloatTensor] = None,
+        gripper_xyz: Optional[torch.FloatTensor] = None,
         inputs_embeds: Optional[torch.FloatTensor] = None,
         past_key_values: Optional[List[torch.FloatTensor]] = None,
         use_cache: Optional[bool] = None,
@@ -142,6 +146,7 @@ class CogACT(nn.Module):
 
         if self.use_diff:
             proprio = proprio.repeat(repeated_diffusion_steps, *([1] * (proprio.ndimension() - 1)))
+            gripper_xyz = gripper_xyz.repeat(repeated_diffusion_steps, *([1] * (gripper_xyz.ndimension() - 1)))
             
             actions = actions.repeat(repeated_diffusion_steps, *([1] * (actions.ndimension() - 1)))
             actions_history = actions[:,0: self.past_action_window_size,:]
@@ -152,11 +157,20 @@ class CogACT(nn.Module):
             action_masks = action_masks.repeat(repeated_diffusion_steps, *([1] * (action_masks.ndimension() - 1)))
             labels = labels.repeat(repeated_diffusion_steps, *([1] * (labels.ndimension() - 1)))
 
-            images = images.repeat(repeated_diffusion_steps, *([1] * (images.ndimension() - 1)))
+            if isinstance(images, dict):
+                images = {
+                    k: v.repeat(repeated_diffusion_steps, *([1] * (v.ndimension() - 1)))
+                    for k, v in images.items()
+                }
+            else:
+                images = images.repeat(repeated_diffusion_steps, *([1] * (images.ndimension() - 1)))
             if self.use_reconstruction and self.recon_image:
                 next_images = next_images.repeat(repeated_diffusion_steps, *([1] * (next_images.ndimension() - 1)))
             if self.use_pointcloud:
                 point_cloud = point_cloud.repeat(repeated_diffusion_steps, *([1] * (point_cloud.ndimension() - 1)))
+            if self.use_tactile:
+                tactile_right = tactile_right.repeat(repeated_diffusion_steps, *([1] * (tactile_right.ndimension() - 1)))
+                tactile_left = tactile_left.repeat(repeated_diffusion_steps, *([1] * (tactile_left.ndimension() - 1)))
             if self.use_pointcloud and self.use_reconstruction and self.recon_pointcloud:
                 next_point_cloud = next_point_cloud.repeat(repeated_diffusion_steps, *([1] * (next_point_cloud.ndimension() - 1)))
         
@@ -171,10 +185,13 @@ class CogACT(nn.Module):
                 next_images=next_images,
                 point_cloud=point_cloud,
                 next_point_cloud=next_point_cloud,
+                tactile_right=tactile_right,
+                tactile_left=tactile_left,
                 labels=labels,
                 x=x,
                 t=timestep,
                 proprio=proprio,
+                gripper_xyz=gripper_xyz,
                 inputs_embeds=inputs_embeds,
                 past_key_values=past_key_values,
                 use_cache=use_cache,
@@ -203,6 +220,8 @@ class CogACT(nn.Module):
             if self.use_contrastive:
                 loss_dict['contrastive_loss'] = output.contrastive_loss
                 loss_dict['total_loss'] += output.contrastive_loss
+                if self.use_tactile:
+                    loss_dict['total_loss'] += output.tactile_contrastive_loss
             return loss_dict, output
         else:
             output = self.vlm(
@@ -276,6 +295,7 @@ class CogACT(nn.Module):
         class_dropout_prob: float = 0.0,
         use_diff: bool = False,
         use_pointcloud: bool = False,
+        use_tactile: bool = False,
         use_contrastive: bool = False,
         use_reconstruction: bool = False,
         recon_image: bool = False,
@@ -293,6 +313,7 @@ class CogACT(nn.Module):
             use_diff=use_diff,
             action_dim=action_dim,
             use_pointcloud=use_pointcloud,
+            use_tactile=use_tactile,
             use_contrastive=use_contrastive,
             use_reconstruction=use_reconstruction,
             recon_image=recon_image,
@@ -345,6 +366,12 @@ class CogACT(nn.Module):
             print("\n\nSuccessfully loaded proprio_embedder!!!!\n")
         else:
             print("\n\nNo proprio_embedder found in checkpoint, initializing a new one!!\n")
+            
+        if "tactile_embedder" in model_state_dict.keys():
+            vlm.tactile_embedder.load_state_dict(model_state_dict["tactile_embedder"])
+            print("\n\nSuccessfully loaded tactile_embedder!!!!\n")
+        else:
+            print("\n\nNo tactile_embedder found in checkpoint, initializing a new one!!\n")
             
         if use_diff and "x_embedder" in model_state_dict.keys() and "t_embedder" in model_state_dict.keys() and "final_layer" in model_state_dict.keys() and use_diff:
             vlm.x_embedder.load_state_dict(model_state_dict["x_embedder"])
@@ -399,6 +426,7 @@ class CogACT(nn.Module):
                         norm_stats=norm_stats,
                         use_diff=use_diff,
                         use_pointcloud=use_pointcloud,
+                        use_tactile=use_tactile,
                         use_contrastive=use_contrastive,
                         use_reconstruction=use_reconstruction,
                         recon_image=recon_image,

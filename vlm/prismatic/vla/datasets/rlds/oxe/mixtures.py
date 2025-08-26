@@ -15,6 +15,12 @@ OXE_NAMED_MIXTURES: Dict[str, List[Tuple[str, float]]] = {
     "metaworld": [
          ("metaworld", 1.0),                                
     ],
+    "franka": [
+         ("franka", 1.0),                                 
+    ],
+    "agilex": [
+         ("agilex", 1.0),                                
+    ],
     "rtx_dataset": [
          ("rtx_dataset", 1.0),                              
     ],

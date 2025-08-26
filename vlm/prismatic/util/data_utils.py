@@ -101,11 +101,28 @@ class PaddedCollatorForActionPrediction:
         input_ids, labels = tuple([instance[key] for instance in instances] for key in ("input_ids", "labels"))
         
         images = [instance["images"] for instance in instances]
-        if isinstance(images[0], torch.Tensor):
+        if isinstance(images[0], dict):
+            image_keys = images[0].keys()
+            images = {
+                k: torch.stack([img_dict[k] for img_dict in images]) 
+                for k in image_keys
+            }
+        elif isinstance(images[0], torch.Tensor):
             images = torch.stack(images)
+        else:
+            raise ValueError(f"Unsupported `images` type = {type(images[0])}")
+        
         next_images = [instance["next_images"] for instance in instances]
-        if isinstance(next_images[0], torch.Tensor):
+        if isinstance(next_images[0], dict):
+            next_image_keys = next_images[0].keys()
+            next_images = {
+                k: torch.stack([img_dict[k] for img_dict in next_images]) 
+                for k in next_image_keys
+            }
+        elif isinstance(next_images[0], torch.Tensor):
             next_images = torch.stack(next_images)
+        else:
+            raise ValueError(f"Unsupported `next_images` type = {type(next_images[0])}")
             
         point_cloud = [instance["point_cloud"] for instance in instances]
         if isinstance(point_cloud[0], torch.Tensor):
@@ -125,47 +142,48 @@ class PaddedCollatorForActionPrediction:
         input_ids = pad_sequence(input_ids, batch_first=True, padding_value=self.pad_token_id)
         labels = pad_sequence(labels, batch_first=True, padding_value=IGNORE_INDEX)
 
-
         # Truncate (if necessary)
         input_ids, labels = input_ids[:, : self.model_max_length], labels[:, : self.model_max_length]
 
         # Get `attention_mask` by checking for `pad_token_id`
         attention_mask = input_ids.ne(self.pad_token_id)
 
-        # [Contract] For VLA Training =>> No "Unimodal" Data!
-        # assert all([pv is not None for pv in pixel_values]), "Invalid VLA Example with `pixel_values = None`!"
-        # assert all([pv is not None for pv in wrist_pixel_values]), "Invalid VLA Example with `pixel_values = None`!"
-
-        # Stack all `front_pixel_values` --> depending on type is torch.Tensor or Dict[str, torch.Tensor]
-        # if isinstance(pixel_values[0], torch.Tensor):
-        #     pixel_values = torch.stack(pixel_values)
-        # elif isinstance(pixel_values[0], dict):
-        #     pixel_values = {
-        #         k: torch.stack([pixel_values[idx][k] for idx in range(len(input_ids))]) for k in pixel_values[0]
-        #     }
-        # else:
-        #     raise ValueError(f"Unsupported `pixel_values` type = {type(pixel_values)}")
-
         # Adding continuous actions and batch processing.
         actions = [instance["actions"] for instance in instances]
         actions = torch.stack(actions)
+        
         action_masks = [instance["action_masks"] for instance in instances]
-        action_masks = torch.stack(action_masks)
+        if action_masks[0] is not None:
+            action_masks = torch.stack(action_masks)
+        else:
+            action_masks = None
 
         proprio = [instance["proprio"] for instance in instances]
         proprio = torch.stack(proprio)
+        
+        gripper_xyz = [instance["gripper_xyz"] for instance in instances]
+        gripper_xyz = torch.stack(gripper_xyz)
+        
+        tactile_right = [instance["tactile_right"] for instance in instances]
+        tactile_right = torch.stack(tactile_right)
+        
+        tactile_left = [instance["tactile_left"] for instance in instances]
+        tactile_left = torch.stack(tactile_left)
 
         output = dict(
             images=images,
             next_images=next_images,
             point_cloud=point_cloud,
             next_point_cloud=next_point_cloud,
+            tactile_right=tactile_right,
+            tactile_left=tactile_left,
             input_ids=input_ids,
             attention_mask=attention_mask,
             labels=labels,
             actions=actions,
             action_masks=action_masks,
             proprio=proprio,
+            gripper_xyz=gripper_xyz,
         )
         if dataset_names is not None:
             output["dataset_names"] = dataset_names

@@ -1126,12 +1126,13 @@ class LlamaModel(LlamaPreTrainedModel):
 
         return causal_mask
 
-from prismatic.models.fuser.contrastive import SceneLevelContrastiveLoss, TokenLevelContrastiveLoss, CoordinateAwareContrastiveLoss
+from prismatic.models.fuser.contrastive import CoordinateAwareContrastiveLoss, TactileContrastiveLoss
 class LlamaForCausalLM(LlamaPreTrainedModel):
     _tied_weights_keys = ["lm_head.weight"]
 
     def __init__(self, config,
                 use_token_contrastive_loss: bool = True,
+                use_tactile_contrastive_loss: bool = True,
                 contrastive_projection_dim: int = 256,
             ):
         super().__init__(config)
@@ -1139,10 +1140,17 @@ class LlamaForCausalLM(LlamaPreTrainedModel):
         self.vocab_size = config.vocab_size
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
         
-        # perceptive contrastive loss
+        # image-pointcloud contrastive loss
         self.use_token_contrastive_loss = use_token_contrastive_loss
         if self.use_token_contrastive_loss:
             self.coordinate_aware_contrastive_loss_module = CoordinateAwareContrastiveLoss(
+                feature_dim=config.hidden_size,
+                projection_dim=contrastive_projection_dim,
+            )
+        # tactile contrastive loss
+        self.use_tactile_contrastive_loss = use_tactile_contrastive_loss
+        if self.use_tactile_contrastive_loss:
+            self.tactile_contrastive_loss_module = TactileContrastiveLoss(
                 feature_dim=config.hidden_size,
                 projection_dim=contrastive_projection_dim,
             )
@@ -1185,9 +1193,13 @@ class LlamaForCausalLM(LlamaPreTrainedModel):
         cache_position: Optional[torch.LongTensor] = None,
         pc_token_indices: Optional[Tuple[int, int]] = None,
         img_token_indices: Optional[Tuple[int, int]] = None,
+        tac_token_indices: Optional[Tuple[int, int]] = None,
         patch_correspondence_indices: Optional[Tuple[int, int]] = None,
         correspondence_valid_mask: Optional[Tuple[int, int]] = None,
+        positive_pc_indices_for_tac: Optional[torch.Tensor] = None,
+        linear_positive_img_indices_for_tac: Optional[torch.Tensor] = None,
         compute_token_contrastive_loss: bool = False,
+        compute_tactile_contrastive_loss: bool = False,
     ) -> Union[Tuple, CausalLMOutputWithPast]:
         r"""
         Args:
@@ -1271,6 +1283,24 @@ class LlamaForCausalLM(LlamaPreTrainedModel):
                 valid_mask=correspondence_valid_mask
             )
             loss += contrastive_loss   
+        
+        tactile_contrastive_loss = None
+        if self.training and compute_tactile_contrastive_loss:
+            hidden_state_layer8 = outputs.hidden_states[8]
+            pc_start, pc_end = pc_token_indices
+            img_start, img_end = img_token_indices
+            tac_start, tac_end = tac_token_indices
+            pc_features = hidden_state_layer8[:, pc_start:pc_end, :]
+            img_features = hidden_state_layer8[:, img_start:img_end, :]
+            tac_features = hidden_state_layer8[:, tac_start:tac_end, :]
+            tactile_contrastive_loss = self.tactile_contrastive_loss_module(
+                tac_features=tac_features,
+                pc_features=pc_features,
+                img_features=img_features,
+                positive_pc_indices=positive_pc_indices_for_tac,
+                linear_positive_img_indices=linear_positive_img_indices_for_tac
+            )
+            loss += tactile_contrastive_loss
 
         if not return_dict:
             output = (logits,) + outputs[1:]
@@ -1280,6 +1310,7 @@ class LlamaForCausalLM(LlamaPreTrainedModel):
             loss=loss,
             logits=logits,
             contrastive_loss=contrastive_loss,
+            tactile_contrastive_loss=tactile_contrastive_loss,
             past_key_values=outputs.past_key_values,
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,

@@ -258,6 +258,7 @@ class TrainingStrategy(ABC):
         save_full_model: bool = True,
         use_diff: bool = False,
         use_pointcloud: bool = False,
+        use_tactile: bool = False,
         use_contrastive: bool = False,
         use_reconstruction: bool = False,
         recon_image: bool = False,
@@ -311,7 +312,10 @@ class TrainingStrategy(ABC):
                             next_images=batch["next_images"] if (use_reconstruction and recon_image) else None,
                             point_cloud=batch["point_cloud"] if use_pointcloud else None,
                             next_point_cloud=batch["next_point_cloud"] if (use_pointcloud and use_reconstruction and recon_pointcloud) else None,
+                            tactile_right=batch["tactile_right"] if use_tactile else None,
+                            tactile_left=batch["tactile_left"] if use_tactile else None,
                             proprio=batch["proprio"],
+                            gripper_xyz=batch["gripper_xyz"],
                             action_masks=batch["action_masks"],
                             output_hidden_states = True,
                             repeated_diffusion_steps = repeated_diffusion_steps,
@@ -382,19 +386,6 @@ class TrainingStrategy(ABC):
 
                     if metrics.global_step>=(self.epochs * math.ceil((len(dataloader) / overwatch.world_size() / self.grad_accumulation_steps))):
                         return
-                    
-                    
-                    # target_steps = self.epochs * math.ceil(len(dataloader) / overwatch.world_size() / self.grad_accumulation_steps)
-                    # # Check if global_step is a fraction (1/10, 2/10, ..., 10/10) of target_steps
-                    # for i in range(1, 11):
-                    #     if metrics.global_step == target_steps * i / 10:
-                    #         self.save_checkpoint(
-                    #             metrics.run_dir, metrics.global_step, epoch, loss.item(), only_trainable=not save_full_model
-                    #         )
-                    #         dist.barrier()
-
-                    # if metrics.global_step>=(self.epochs * math.ceil((len(dataloader) / overwatch.world_size() / self.grad_accumulation_steps))):
-                    #     return
 
 
                 # Update Progress Bar

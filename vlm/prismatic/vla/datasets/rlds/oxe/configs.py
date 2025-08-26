@@ -33,10 +33,11 @@ from prismatic.vla.datasets.rlds.oxe.utils.droid_utils import zero_action_filter
 class StateEncoding(IntEnum):
     # fmt: off
     NONE = -1               # No Proprioceptive State
-    POS_EULER = 1           # EEF XYZ (3) + Roll-Pitch-Yaw (3) + <PAD> (1) + Gripper Open/Close (1)
+    POS_EULER = 1           # EEF XYZ (3) + Roll-Pitch-Yaw (3) + Gripper Open/Close (1)
     POS_QUAT = 2            # EEF XYZ (3) + Quaternion (4) + Gripper Open/Close (1)
     JOINT = 3               # Joint Angles (7, <PAD> if fewer) + Gripper Open/Close (1)
     JOINT_BIMANUAL = 4      # Joint Angles (2 x [ Joint Angles (6) + Gripper Open/Close (1) ])
+    EEF_BIMANUAL = 5
     STATE_METAWORLD = 6
     # fmt: on
 
@@ -48,6 +49,7 @@ class ActionEncoding(IntEnum):
     JOINT_POS = 2           # Joint Delta Position (7) + Gripper Open/Close (1)
     JOINT_POS_BIMANUAL = 3  # Joint Delta Position (2 x [ Joint Delta Position (6) + Gripper Open/Close (1) ])
     EEF_R6 = 4              # EEF Delta XYZ (3) + R6 (6) + Gripper Open/Close (1)
+    EEF_BIMANUAL = 5
     ACTION_METAWORLD = 6
     # fmt: on
 
@@ -67,6 +69,32 @@ OXE_DATASET_CONFIGS = {
         "state_obs_keys": ["proprio"],
         "state_encoding": StateEncoding.STATE_METAWORLD,
         "action_encoding": ActionEncoding.ACTION_METAWORLD,
+    },
+    "franka": {
+        "image_obs_keys": {"primary": "image_third", "next_primary": "next_image_third", 
+                           "wrist": "image_wrist", "next_wrist": "next_image_wrist",
+                        },
+        "depth_obs_keys": {"primary": None, "secondary": None, "wrist": None},
+        "state_obs_keys": ["proprio"],
+        "state_encoding": StateEncoding.POS_QUAT,
+        "action_encoding": ActionEncoding.EEF_POS,
+    },
+    "agilex": {
+        "image_obs_keys": {"primary": "image_head", 
+                           "next_primary": "next_image_head", 
+                           "right":"image_right",
+                           "next_right":"next_image_right",
+                           "left":"image_left",
+                           "next_left":"next_image_left",
+                           "tac_right_thumb":"tactile_right_thumb",
+                           "tac_right_finger":"tactile_right_finger",
+                           "tac_left_thumb":"tactile_left_thumb",
+                           "tac_left_finger":"tactile_left_finger",
+                        },
+        "depth_obs_keys": {"primary": None, "secondary": None, "wrist": None},
+        "state_obs_keys": ["proprio"],
+        "state_encoding": StateEncoding.EEF_BIMANUAL,
+        "action_encoding": ActionEncoding.EEF_BIMANUAL,
     },
     "rtx_dataset": {
         "image_obs_keys": {"primary": "image", "next_primary": "next_image", "secondary": None, "wrist": None},

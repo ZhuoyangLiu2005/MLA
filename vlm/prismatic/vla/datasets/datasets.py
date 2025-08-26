@@ -27,34 +27,6 @@ from transformers import CLIPImageProcessor
 # HuggingFace Default / LLaMa-2 IGNORE_INDEX (for labels)
 IGNORE_INDEX = -100
 
-def farthest_point_sample(xyz: torch.Tensor, npoint: int) -> torch.Tensor:
-    """
-    Input:
-        xyz: (B, N, 3) tensor, where N > npoint
-        npoint: int, number of points to sample
-    Return:
-        centroids: (B, npoint) tensor of indices
-    """
-    device = xyz.device
-    B, N, C = xyz.shape
-    
-    centroids = torch.zeros(B, npoint, dtype=torch.long).to(device)  # 存储采样点索引
-    distance = torch.ones(B, N).to(device) * 1e10  # 初始化距离矩阵
-    
-    # 初始点可以随机选，或者选重心最远点
-    farthest = torch.randint(0, N, (B,), dtype=torch.long).to(device)
-    
-    for i in range(npoint):
-        centroids[:, i] = farthest  # 记录当前最远点
-        centroid = xyz[torch.arange(B), farthest, :].view(B, 1, 3)  # 取出最远点坐标
-        dist = torch.sum((xyz - centroid) ** 2, -1)  # 计算所有点到最远点的距离
-        mask = dist < distance
-        distance[mask] = dist[mask]  # 更新最小距离
-        farthest = torch.max(distance, -1)[1]  # 选择下一个最远点
-    
-    return centroids
-
-
 @dataclass
 class RLDSBatchTransform:
     action_tokenizer: ActionTokenizer
@@ -63,10 +35,12 @@ class RLDSBatchTransform:
     prompt_builder_fn: Type[PromptBuilder]
     predict_stop_token: bool = True
     use_pointcloud: bool = False
+    use_tactile: bool = False
 
     def __call__(self, rlds_batch: Dict[str, Any]) -> Dict[str, Any]:
         """Converts a RLDS batch to the format expected by the OpenVLA collator/models."""
         dataset_name, action, proprio = rlds_batch["dataset_name"], rlds_batch["action"][0], rlds_batch["observation"]["proprio"][0]
+        gripper_xyz = rlds_batch["observation"]["gripper_xyz"][0]
 
         # For future action predictions
         if rlds_batch["action"].shape[0] > 1:
@@ -74,22 +48,43 @@ class RLDSBatchTransform:
         else:
             dataset_name, action, proprio = rlds_batch["dataset_name"], rlds_batch["action"], rlds_batch["observation"]["proprio"]
 
-        # image
-        front_img = Image.fromarray(rlds_batch["observation"]["image_primary"][0])
-        next_front_img = Image.fromarray(rlds_batch["observation"]["image_next_primary"][0])
-        wrist_img = None
-        wrist_left_img = None
+        # images
+        rgb_images = {}
+        front_image = Image.fromarray(rlds_batch["observation"]["image_primary"][0])
+        f_width, f_height = 672, 672
+        front_image = self.image_transform.preprocess(front_image, return_tensors='pt')['pixel_values'][0]   
+        next_image=None
+        if "image_next_primary" in rlds_batch["observation"]:
+            next_front_image = Image.fromarray(rlds_batch["observation"]["image_next_primary"][0])
+            next_image = self.image_transform.preprocess(next_front_image, return_tensors='pt')['pixel_values'][0]
+        wrist_image = None
         if "image_wrist" in rlds_batch["observation"]:
-            wrist_img = Image.fromarray(rlds_batch["observation"]["image_wrist"][0])
-        if "image_secondary" in rlds_batch["observation"]:
-            wrist_left_img = Image.fromarray(rlds_batch["observation"]["image_secondary"][0])
-        f_width, f_height = front_img.size
-        
-        image_mask = torch.ones(1, 672, 672)
-        image = self.image_transform.preprocess(front_img, return_tensors='pt')['pixel_values'][0]   
-        if next_front_img is not None:
-            next_image = self.image_transform.preprocess(next_front_img, return_tensors='pt')['pixel_values'][0] if next_front_img is not None else None
-        image = torch.cat([image, image_mask], dim=0)
+            wrist_image = Image.fromarray(rlds_batch["observation"]["image_wrist"][0])
+            wrist_image = self.image_transform.preprocess(wrist_image, return_tensors='pt')['pixel_values'][0]   
+        left_image = None
+        if "image_left" in rlds_batch["observation"]:
+            left_image = Image.fromarray(rlds_batch["observation"]["image_left"][0])
+            left_image = self.image_transform.preprocess(left_image, return_tensors='pt')['pixel_values'][0]   
+            
+        image_mask = torch.ones(1, f_width, f_height)
+        front_image = torch.cat([front_image, image_mask], dim=0)
+        rgb_images['front_image']=front_image
+        if wrist_image is not None:
+            wrist_image = torch.cat([wrist_image, image_mask], dim=0)
+            rgb_images['wrist_image']=wrist_image
+        if left_image is not None:
+            left_image = torch.cat([left_image, image_mask], dim=0)
+            rgb_images['left_image']=left_image
+            
+        # load tactile_vectors if needed
+        if self.use_tactile:
+            tactile_right=rlds_batch['tactile_right']
+            tactile_right = torch.tensor(tactile_right, dtype=torch.float32)
+            tactile_left=rlds_batch['tactile_left']
+            tactile_left = torch.tensor(tactile_left, dtype=torch.float32)
+        else:
+            tactile_right = None
+            tactile_left = None
         
         # load pointcloud if needed
         if self.use_pointcloud:
@@ -123,7 +118,6 @@ class RLDSBatchTransform:
                 {"from": "gpt", "value": f"<BOD><EOD>{gpt_values}"},
             ]
 
-
         # Construct Chat-based Prompt
         prompt_builder = self.prompt_builder_fn("openvla")
         for turn in conversation:
@@ -141,6 +135,7 @@ class RLDSBatchTransform:
         action_mask = None
         action = torch.tensor(action, dtype=torch.float32)
         proprio = torch.tensor(proprio, dtype=torch.float32)
+        gripper_xyz = torch.tensor(gripper_xyz, dtype=torch.float32)
         if "action_mask" in rlds_batch:
             action_mask = torch.tensor(rlds_batch["action_mask"], dtype=torch.bool)
 
@@ -157,16 +152,20 @@ class RLDSBatchTransform:
         # print(input_ids)
         # input()
             
-        return dict(images = image, 
+        return dict(images = rgb_images, 
                     point_cloud = front_pc, 
                     next_images = next_image,
                     next_point_cloud = next_front_pc,
+                    tactile_right = tactile_right,
+                    tactile_left = tactile_left,
                     input_ids=input_ids, 
                     labels=labels, 
                     dataset_name=dataset_name, 
                     actions=action, 
                     action_masks=action_mask, 
-                    proprio = proprio)
+                    proprio = proprio,
+                    gripper_xyz=gripper_xyz,
+                )
 
 
 class RLDSDataset(IterableDataset):
@@ -183,6 +182,7 @@ class RLDSDataset(IterableDataset):
         image_aug: bool = False,
         load_all_data_for_training: bool = True,
         use_pointcloud: bool = False,
+        use_tactile: bool = False,
     ) -> None:
         """Lightweight wrapper around RLDS TFDS Pipeline for use with PyTorch/OpenVLA Data Loaders."""
         self.data_root_dir, self.data_mix, self.batch_transform = data_root_dir, data_mix, batch_transform
@@ -198,7 +198,7 @@ class RLDSDataset(IterableDataset):
         per_dataset_kwargs, weights = get_oxe_dataset_kwargs_and_weights(
             self.data_root_dir,
             mixture_spec,
-            load_camera_views=("primary", "next_primary"), # "primary", "wrist", "secondary"
+            load_camera_views=("primary", "wrist", "next_primary"), # "primary", "wrist", "secondary"
             load_depth=False,
             load_proprio=False,
             load_language=True,

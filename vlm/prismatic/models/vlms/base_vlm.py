@@ -26,8 +26,7 @@ from prismatic.models.backbones.llm import LLMBackbone
 from prismatic.models.backbones.llm.prompting import PromptBuilder
 from prismatic.models.backbones.vision import VisionBackbone
 
-# 新加入的2D视觉处理模块
-from prismatic.models.eve_tokenizer.vision_tokenizer import VisionTokenizer
+from prismatic.models.image.vision_tokenizer import VisionTokenizer
 
 
 

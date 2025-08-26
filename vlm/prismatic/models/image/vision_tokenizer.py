@@ -13,42 +13,6 @@ import random
 from transformers import CLIPImageProcessor
 from prismatic.models.constants import IMAGE_TOKEN_INDEX
 
-class SelfImageTransform:
-    def __init__(
-        self,
-        image_size: int = 224,
-        resize_strategy: str = "resize",  # "resize" | "letterbox" | "center_crop"
-        mean: Tuple[float, float, float] = (0.48145466, 0.4578275, 0.40821073),  # CLIP 默认均值
-        std: Tuple[float, float, float] = (0.26862954, 0.26130258, 0.27577711),   # CLIP 默认方差
-    ):
-        self.image_size = image_size
-        self.resize_strategy = resize_strategy
-        self.mean = mean
-        self.std = std
-
-        # 定义基础转换（PIL → Tensor + 归一化）
-        self.base_transform = transforms.Compose([
-            transforms.ToTensor(),  # [0, 255] → [0.0, 1.0], HWC → CHW
-            transforms.Normalize(mean=self.mean, std=self.std),  # 归一化
-        ])
-
-        # 定义 resize 策略
-        if self.resize_strategy == "resize":
-            self.resize = transforms.Resize((self.image_size, self.image_size))
-        elif self.resize_strategy == "center_crop":
-            self.resize = transforms.Compose([
-                transforms.Resize(self.image_size),
-                transforms.CenterCrop(self.image_size),
-            ])
-        else:
-            raise ValueError(f"Unknown resize strategy: {self.resize_strategy}")
-
-    def __call__(self, img: Image.Image, **kwargs) -> torch.Tensor:
-        """输入 PIL Image，输出预处理后的 Tensor"""
-        img = self.resize(img)      # 缩放/填充
-        img = self.base_transform(img)  # 归一化 + 转 Tensor
-        return img
-
 
 class LocalAttention(nn.Module):
     def __init__(self, input_size, conv_stride, num_heads=8):
@@ -134,7 +98,6 @@ class VisionTokenizer(nn.Module):
         self.half_precision_dtype = torch.float16  
         self.is_loaded = True
         self.hidden_size = input_size
-        # self.image_processor = CLIPImageProcessor.from_pretrained(vision_tower_name)
         self.image_processor = CLIPImageProcessor(
             do_resize=True,
             size=672,
@@ -158,7 +121,7 @@ class VisionTokenizer(nn.Module):
 
     def forward(self, pixel_values, modules):
         # if self.half_precision_dtype:
-        #     pixel_values = pixel_values.to(self.half_precision_dtype)  # 将输入数据转换为半精度
+        #     pixel_values = pixel_values.to(self.half_precision_dtype) 
         pixel_values, pixel_masks = pixel_values[:, :-1, :, :], pixel_values[:, -1:, :, :]
 
         patch_embeds = self.patch_embedding(pixel_values.to(dtype=self.dtype))

@@ -31,14 +31,15 @@ from prismatic.models.vlms.base_vlm import VLM
 from prismatic.overwatch import initialize_overwatch
 from prismatic.util.nn_utils import FusedMLPProjector, LinearProjector, MLPProjector
 
-from prismatic.models.eve_tokenizer.vision_tokenizer import VisionTokenizer
-from prismatic.models.eve_tokenizer.vision_tokenizer import MLP_GELU
-from prismatic.models.fuser.contrastive import project_3d_to_2d_672_rlbench, project_3d_to_2d_672_metaworld
+from prismatic.models.image.vision_tokenizer import VisionTokenizer
+from prismatic.models.image.vision_tokenizer import MLP_GELU
+from prismatic.models.fuser.contrastive import project_3d_to_2d_672_rlbench, project_3d_to_2d_672_metaworld, project_3d_to_2d_672_franka_right
 from prismatic.models.fuser.camera import get_camera_params
-from prismatic.a2pmodels.backbone.pointvit import PointViT
+from prismatic.models.pointcloud.backbone.pointvit import PointViT
+from prismatic.models.tactile.tokenizer import TactileEncoder
 from prismatic.models.reconstruction.models import MultimodalReconstructionManager
-from prismatic.models.reconstruction.utils import images_to_patches, patches_to_images, dilate_mask, create_roi_mask_from_indices
-from prismatic.models.reconstruction.recon_loss import chamfer_distance, chamfer_distance_l2, earth_movers_distance
+from prismatic.models.reconstruction.utils import images_to_patches, create_roi_mask_from_indices
+from prismatic.models.reconstruction.recon_loss import chamfer_distance_l2, earth_movers_distance
 from prismatic.models.reconstruction.visualize import visualize_reconstruction_simple, visualize_reconstruction_diff, visualize_reconstruction_rgb
 
 from action_model import ActionEmbedder, TimestepEmbedder, LabelEmbedder, FinalLayer
@@ -63,8 +64,8 @@ def save_projection_visualization(
     image_size=(672, 672), 
     total_stride=42,
     save_dir="projection_visualization",
-    rgb_image=None,  # 新增参数：RGB背景图像
-    background_alpha=0.4  # 新增参数：背景透明度
+    rgb_image=None,  
+    background_alpha=0.4,
 ):
     """
     
@@ -173,6 +174,7 @@ class PrismaticVLM(VLM):
         use_diff = False,
         # === Contrastive Parameters ===
         use_pointcloud: bool = False,
+        use_tactile: bool = False,
         use_contrastive: bool = False,
         llm_vision_layers: int = 1,
         # === Reconstruction Parameters ===
@@ -201,6 +203,7 @@ class PrismaticVLM(VLM):
         self.token_size = token_size
         self.use_diff = use_diff
         self.use_pointcloud = use_pointcloud
+        self.use_tactile = use_tactile
         self.use_contrastive = use_contrastive
         self.llm_vision_layers = llm_vision_layers
         
@@ -238,6 +241,9 @@ class PrismaticVLM(VLM):
                                             base_ckpt_path="/media/liuzhuoyang/new_vla/Any2Point/Any2Point_CLIP_Lang/ckpts/ViT-L-14.pt",
                                         )
             self.projector_3d = MLPProjector(self.vision_tower_3d.embed_dim, token_size)
+        
+        if self.use_tactile:
+            self.tactile_embedder = ActionEmbedder(action_size=6, hidden_size=token_size)
 
         # === Diffusion Components ===
         self.proprio_embedder = ActionEmbedder(action_size=action_dim, hidden_size=token_size)
@@ -275,6 +281,8 @@ class PrismaticVLM(VLM):
             self.all_module_keys.extend(["x_embedder", "t_embedder", "final_layer",])
         if self.use_pointcloud:
             self.all_module_keys.extend(["vision_tower_3d", "projector_3d",])
+        if self.use_tactile:
+            self.all_module_keys.extend(["tactile_embedder"])
         if self.use_reconstruction:
             self.all_module_keys.append("reconstruction_manager")
         self.trainable_module_keys = []
@@ -359,6 +367,7 @@ class PrismaticVLM(VLM):
         action_dim: int = 7,
         use_diff: bool = False,
         use_pointcloud: bool = False,
+        use_tactile: bool = False,
         use_reconstruction: bool = False,
         recon_image: bool = False,
         recon_pointcloud: bool = False,
@@ -373,6 +382,7 @@ class PrismaticVLM(VLM):
             action_dim=action_dim,
             use_diff=use_diff,
             use_pointcloud=use_pointcloud,
+            use_tactile=use_tactile,
             use_reconstruction=use_reconstruction,
             recon_image=recon_image,
             recon_pointcloud=recon_pointcloud,
@@ -444,6 +454,8 @@ class PrismaticVLM(VLM):
             if self.use_pointcloud:
                 self.vision_tower_3d.requires_grad_(False)
                 self.projector_3d.requires_grad_(True)
+            if self.use_tactile:
+                self.tactile_embedder.requires_grad_(True)
             if self.use_reconstruction:
                 self.reconstruction_manager.requires_grad_(True)
 
@@ -454,6 +466,8 @@ class PrismaticVLM(VLM):
                 self.trainable_module_keys.extend(["x_embedder", "t_embedder","final_layer"])
             if self.use_pointcloud:
                 self.trainable_module_keys.extend(["projector_3d"])
+            if self.use_tactile:
+                self.trainable_module_keys.append("tactile_embedder")
             if self.use_reconstruction:
                 self.trainable_module_keys.append("reconstruction_manager")
 
@@ -467,6 +481,8 @@ class PrismaticVLM(VLM):
                 overwatch.info(f"[Frozen]    🥶 =>> Vision Tower 3D ", ctx_level=1)
                 overwatch.info(f"[TRAINABLE] 🔥 =>> Projector 3D ", ctx_level=1)
             overwatch.info(f"[TRAINABLE] 🔥 =>> LLM Backbone `{self.llm_backbone.identifier}`", ctx_level=1) 
+            if self.use_tactile:
+                overwatch.info(f"[TRAINABLE] 🔥 =>> Tactile Embedder ", ctx_level=1)
             if self.use_reconstruction:
                 overwatch.info(f"[TRAINABLE] 🔥 =>> Reconstruction Manager ", ctx_level=1)
 
@@ -477,6 +493,10 @@ class PrismaticVLM(VLM):
             if self.use_pointcloud:
                 self.vision_tower_3d.requires_grad_(True)
                 self.projector_3d.requires_grad_(True)
+            if self.use_tactile:
+                self.tactile_embedder.requires_grad_(True)
+            if self.use_reconstruction:
+                self.reconstruction_manager.requires_grad_(True)
 
             # Add to `self.trainable_module_keys`
             self.trainable_module_keys = ["vision_tower_2d","projector_2d",
@@ -485,6 +505,8 @@ class PrismaticVLM(VLM):
                 self.trainable_module_keys.extend(["x_embedder", "t_embedder", "final_layer"])
             if self.use_pointcloud:
                 self.trainable_module_keys.extend(["vision_tower_3d", "projector_3d"])
+            if self.use_tactile:
+                self.trainable_module_keys.append("tactile_embedder")
             if self.use_reconstruction:
                 self.trainable_module_keys.append("reconstruction_manager")
 
@@ -497,6 +519,8 @@ class PrismaticVLM(VLM):
             if self.use_pointcloud:
                 overwatch.info(f"[TRAINABLE] 🔥 =>> Vision Tower 3D ", ctx_level=1)
                 overwatch.info(f"[TRAINABLE] 🔥 =>> Projector 3D ", ctx_level=1)
+            if self.use_tactile:
+                overwatch.info(f"[TRAINABLE] 🔥 =>> Tactile Embedder ", ctx_level=1)
             overwatch.info(f"[TRAINABLE] 🔥 =>> LLM Backbone `{self.llm_backbone.identifier}`", ctx_level=1)
             if self.use_reconstruction:
                 overwatch.info(f"[TRAINABLE] 🔥 =>> Reconstruction Manager ", ctx_level=1)
@@ -629,81 +653,141 @@ class PrismaticVLM(VLM):
         )
     
     def get_fused_tokens(
-        self, images, pointcloud
+        self, images, pointcloud, tactile_right=None, tactile_left=None, gripper_xyz=None
     ):
-        camera_params = get_camera_params("rlbench_front", device=images.device if pointcloud is None else pointcloud.device)
-        # 2D tokens
-        projected_image_tokens, patch_hw = self.encode_images(images)
-        projected_image_tokens = torch.stack(projected_image_tokens, dim=0)
-        # 3D tokens
-        if self.use_pointcloud and pointcloud is not None:
-            pointcloud_patch_embeddings, pointcloud_centers = self.vision_tower_3d(pointcloud)
-            projected_pointcloud_tokens = self.projector_3d(pointcloud_patch_embeddings)  
-            patch_indices, valid_mask = project_3d_to_2d_672_rlbench(
-                pointcloud_centers, 
-                camera_params.K,
-                camera_params.R,
-                camera_params.t,
-                image_size_resize=(672, 672),
-                vision_strides={'patch_stride': 14, 'conv_stride': 3}
-            )
-            # patch_indices, valid_mask = project_3d_to_2d_672_metaworld(
+        if isinstance(images, dict):
+            assert 'front_image' in images, "front_image must be present in multi-view images"
+            
+            front_camera_params = get_camera_params("franka_right", device=images['front_image'].device if pointcloud is None else pointcloud.device)
+            projected_front_tokens, patch_hw = self.encode_images(images['front_image'])
+            projected_front_tokens = torch.stack(projected_front_tokens, dim=0)
+            
+            if self.use_pointcloud and pointcloud is not None:
+                pointcloud_patch_embeddings, pointcloud_centers = self.vision_tower_3d(pointcloud)
+                projected_pointcloud_tokens = self.projector_3d(pointcloud_patch_embeddings)
+                
+                patch_indices, valid_mask = project_3d_to_2d_672_franka_right(
+                    pointcloud_centers, 
+                    front_camera_params.K,
+                    front_camera_params.R,
+                    front_camera_params.t,
+                    image_size_resize=(672, 672),
+                    vision_strides={'patch_stride': 14, 'conv_stride': 3}
+                )
+            else:
+                B = projected_front_tokens.shape[0]  
+                N_pc = projected_front_tokens.shape[1]  
+                projected_pointcloud_tokens = torch.zeros(
+                    (B, N_pc, self.token_size), 
+                    dtype=projected_front_tokens.dtype,
+                    device=projected_front_tokens.device
+                )
+                patch_indices = torch.zeros(
+                    (B, N_pc, 2), 
+                    dtype=torch.long, 
+                    device=projected_front_tokens.device
+                )
+                valid_mask = torch.zeros(
+                    (B, N_pc), 
+                    dtype=torch.bool, 
+                    device=projected_front_tokens.device
+                )
+                
+            ## project visualization
+            # save_projection_visualization(
             #     pointcloud_centers, 
-            #     camera_params.K,
-            #     camera_params.R,
-            #     camera_params.t,
-            #     "corner",
-            #     image_size_resize=(672, 672),
-            #     vision_strides={'patch_stride': 14, 'conv_stride': 3}
+            #     patch_indices, 
+            #     valid_mask, 
+            #     save_dir="/media/liuzhuoyang/new_vla/Rec_Tac_Diff_beta/LLM_policy/vis", 
+            #     rgb_image=images['front_image'],
             # )
-            # print(patch_indices)
-            # input()
+            # input("Press Enter to continue...")
+
+            assert projected_pointcloud_tokens.shape[1] == projected_front_tokens.shape[1], \
+                f"Token count mismatch: PC={projected_pointcloud_tokens.shape[1]}, Front Img={projected_front_tokens.shape[1]}"
+            
+            fused_tokens = torch.cat(
+                [projected_pointcloud_tokens, projected_front_tokens], 
+                dim=1
+            )
+            
+            other_views = [key for key in images.keys() if key != 'front_image']
+            for view_key in other_views:
+                projected_view_tokens, _ = self.encode_images(images[view_key])
+                projected_view_tokens = torch.stack(projected_view_tokens, dim=0)
+                fused_tokens = torch.cat([fused_tokens, projected_view_tokens], dim=1)
+            
         else:
-            B = projected_image_tokens.shape[0]  
-            N_pc = projected_image_tokens.shape[1]  
-            projected_pointcloud_tokens = torch.zeros(
-                (B, N_pc, self.token_size), 
-                dtype=projected_image_tokens.dtype,
-                device=projected_image_tokens.device
-            )
-            patch_indices = torch.zeros(
-                (B, N_pc, 2), 
-                dtype=torch.long, 
-                device=projected_image_tokens.device
-            )
-            valid_mask = torch.zeros(
-                (B, N_pc), 
-                dtype=torch.bool, 
-                device=projected_image_tokens.device
-            )
+            camera_params = get_camera_params("rlbench_front", device=images.device if pointcloud is None else pointcloud.device)
+            # 2D tokens
+            projected_image_tokens, patch_hw = self.encode_images(images)
+            projected_image_tokens = torch.stack(projected_image_tokens, dim=0)
 
-        # print("projected_image_tokens.shape: ", projected_image_tokens.shape)
-        # print("projected_pointcloud_tokens.shape: ", projected_pointcloud_tokens.shape)
-        # print("pointcloud_centers.shape: ", pointcloud_centers.shape)
-        # input("Press Enter to continue...")
-        
-        ## project visualization
-        # save_projection_visualization(
-        #     pointcloud_centers, 
-        #     patch_indices, 
-        #     valid_mask, 
-        #     save_dir="/media/liuzhuoyang/new_vla/Rec_Diff_beta/LLM_policy/vis", 
-        #     rgb_image=images,
-        # )
-        # input("Press Enter to continue...")
-        
-        assert projected_pointcloud_tokens.shape[1] == projected_image_tokens.shape[1], \
-            f"Token count mismatch: PC={projected_pointcloud_tokens.shape[1]}, Img={projected_image_tokens.shape[1]}"
-        
-        projected_fused_tokens = torch.cat(
-            [projected_pointcloud_tokens, projected_image_tokens], 
-            dim=1
-        )
-        # print(projected_fused_tokens)
-        # print(projected_fused_tokens.shape)
-        # input()
+            # 3D tokens
+            if self.use_pointcloud and pointcloud is not None:
+                pointcloud_patch_embeddings, pointcloud_centers = self.vision_tower_3d(pointcloud)
+                projected_pointcloud_tokens = self.projector_3d(pointcloud_patch_embeddings)
+                
+                patch_indices, valid_mask = project_3d_to_2d_672_franka_right(
+                    pointcloud_centers, 
+                    camera_params.K,
+                    camera_params.R,
+                    camera_params.t,
+                    image_size_resize=(672, 672),
+                    vision_strides={'patch_stride': 14, 'conv_stride': 3}
+                )
+            else:
+                B = projected_image_tokens.shape[0]  
+                N_pc = projected_image_tokens.shape[1]  
+                projected_pointcloud_tokens = torch.zeros(
+                    (B, N_pc, self.token_size), 
+                    dtype=projected_image_tokens.dtype,
+                    device=projected_image_tokens.device
+                )
+                patch_indices = torch.zeros(
+                    (B, N_pc, 2), 
+                    dtype=torch.long, 
+                    device=projected_image_tokens.device
+                )
+                valid_mask = torch.zeros(
+                    (B, N_pc), 
+                    dtype=torch.bool, 
+                    device=projected_image_tokens.device
+                )
 
-        return projected_fused_tokens, patch_indices, valid_mask
+            assert projected_pointcloud_tokens.shape[1] == projected_image_tokens.shape[1], \
+                f"Token count mismatch: PC={projected_pointcloud_tokens.shape[1]}, Img={projected_image_tokens.shape[1]}"
+            
+            fused_tokens = torch.cat(
+                [projected_pointcloud_tokens, projected_image_tokens], 
+                dim=1
+            )
+        positive_pc_indices_for_tac = None
+        linear_positive_img_indices_for_tac = None
+        pointcloud_centers_for_tac = None
+        if self.use_tactile and tactile_right is not None and tactile_left is not None:
+            tac_right_embedding = self.tactile_embedder(tactile_right).unsqueeze(1)
+            tac_left_embedding = self.tactile_embedder(tactile_left).unsqueeze(1)
+            fused_tokens = torch.cat(
+                [fused_tokens, tac_right_embedding, tac_left_embedding],
+                dim=1
+            )
+            gripper_xyz_expanded = gripper_xyz.unsqueeze(1)
+            distances = torch.cdist(gripper_xyz_expanded, pointcloud_centers).squeeze(1) # -> [B, 256]
+            _, positive_pc_indices_for_tac = torch.topk(
+                distances, k=2, dim=1, largest=False
+            ) # -> [B, 2]
+            patch_w = int(projected_front_tokens.shape[1]**0.5) # 16
+            expanded_indices_for_gather = positive_pc_indices_for_tac.unsqueeze(-1).expand(-1, -1, 2) # -> [B, 2, 2]
+            positive_img_indices_2d = torch.gather(
+                patch_indices, 1, expanded_indices_for_gather
+            ) # -> [B, 2, 2]
+            linear_positive_img_indices_for_tac = \
+                positive_img_indices_2d[..., 0] * patch_w + positive_img_indices_2d[..., 1] # -> [B, 2]
+            pointcloud_centers_for_tac = pointcloud_centers
+            
+        return (fused_tokens, patch_indices, valid_mask, 
+            positive_pc_indices_for_tac, linear_positive_img_indices_for_tac, pointcloud_centers_for_tac)
     
     def compute_reconstruction_losses(
         self, 
@@ -769,10 +853,13 @@ class PrismaticVLM(VLM):
         t: Optional[torch.FloatTensor] = None,
         z: Optional[torch.FloatTensor] = None,
         proprio: Optional[torch.FloatTensor] = None,
+        gripper_xyz: Optional[torch.FloatTensor] = None,
         input_ids: Optional[torch.LongTensor] = None,
         attention_mask: Optional[torch.Tensor] = None,
         images: Optional[torch.FloatTensor] = None,
         point_cloud: Optional[torch.FloatTensor] = None,
+        tactile_right: Optional[torch.FloatTensor] = None,
+        tactile_left: Optional[torch.FloatTensor] = None,
         labels: Optional[torch.LongTensor] = None,
         inputs_embeds: Optional[torch.FloatTensor] = None,
         past_key_values: Optional[List[torch.FloatTensor]] = None,
@@ -847,7 +934,25 @@ class PrismaticVLM(VLM):
             return output, None
         
         # get image and point_cloud embeddings
-        projected_fused_embeddings, patch_indices, valid_mask= self.get_fused_tokens(images, point_cloud) 
+        projected_fused_embeddings, patch_indices, valid_mask, \
+            positive_pc_indices_for_tac, linear_positive_img_indices_for_tac, \
+            pointcloud_centers_for_tac = self.get_fused_tokens(
+                images, point_cloud, tactile_right, tactile_left, gripper_xyz
+            )
+        N_pc = 256
+        N_img = 256
+        bos_token_len = 1
+        pc_tokens_start_idx = bos_token_len
+        pc_tokens_end_idx = pc_tokens_start_idx + N_pc
+        img_tokens_start_idx = pc_tokens_end_idx
+        img_tokens_end_idx = img_tokens_start_idx + N_img
+        current_front_image_features = projected_fused_embeddings[:, N_pc:, :]
+        
+        if self.use_tactile:
+            N_tac = 2
+            tac_tokens_start_idx = img_tokens_end_idx
+            tac_tokens_end_idx = tac_tokens_start_idx + N_tac
+        
         input_embeddings = self.llm_backbone.embed_input_ids(input_ids)
         
         # Create initial embeddings with fused tokens
@@ -855,16 +960,6 @@ class PrismaticVLM(VLM):
                        projected_fused_embeddings, 
                        input_embeddings[:, 1:, :]], dim=1
                     )
-        
-        # Token layout tracking
-        N_pc = projected_fused_embeddings.shape[1] // 2
-        N_img = projected_fused_embeddings.shape[1] // 2
-        bos_token_len = 1
-        pc_tokens_start_idx = bos_token_len
-        pc_tokens_end_idx = pc_tokens_start_idx + N_pc
-        img_tokens_start_idx = pc_tokens_end_idx
-        img_tokens_end_idx = img_tokens_start_idx + N_img
-        current_image_features = projected_fused_embeddings[:, N_pc:, :]
 
         # Process proprio and diffusion embeddings
         proprio = self.proprio_embedder(proprio)
@@ -974,9 +1069,13 @@ class PrismaticVLM(VLM):
             return_dict=True,
             pc_token_indices=(pc_tokens_start_idx, pc_tokens_end_idx),
             img_token_indices=(img_tokens_start_idx, img_tokens_end_idx),
+            tac_token_indices=(tac_tokens_start_idx, tac_tokens_end_idx) if self.use_tactile else None,
             patch_correspondence_indices=patch_indices,
             correspondence_valid_mask=valid_mask,
+            positive_pc_indices_for_tac=positive_pc_indices_for_tac,
+            linear_positive_img_indices_for_tac=linear_positive_img_indices_for_tac,
             compute_token_contrastive_loss=self.use_contrastive, 
+            compute_tactile_contrastive_loss=self.use_contrastive,
         )
         
         # === Reconstruction Forward Pass ===
@@ -1004,7 +1103,7 @@ class PrismaticVLM(VLM):
             # Perform multimodal reconstruction
             reconstruction_outputs = self.reconstruction_manager(
                 llm_hidden_states=llm_hidden_states,
-                current_image_features=current_image_features,
+                current_image_features=current_front_image_features,
                 current_images_patches=current_images_patches,
                 current_point_cloud=None,
                 roi_mask_2d=roi_mask_2d,

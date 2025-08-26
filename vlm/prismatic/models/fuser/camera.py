@@ -34,7 +34,19 @@ CAMERA_CONFIGS = {
         ], dtype=torch.float32),
         t=torch.tensor([0.0, 0.0, 0.0], dtype=torch.float32)
     ),
-    
+    "franka_right": CameraParams(
+        K=torch.tensor([
+            [387.414794921875, 0.0, 319.47052001953125],   
+            [0.0, 386.8714904785156, 241.13287353515625],  
+            [0.0, 0.0, 1.0]                             
+        ],dtype=torch.float32),
+        R=torch.tensor([
+            [ 0.91300858,  0.26157042, -0.31304353],
+            [ 0.39730357, -0.7442472,   0.53688545],
+            [-0.09254842, -0.61455433, -0.78342694]
+        ], dtype=torch.float32),
+        t=torch.tensor([0.8591219242556176, -0.5851783639922448, 0.7535876808722389], dtype=torch.float32)
+    ),
 }
 
 def get_camera_params(config_name="default", device=None):

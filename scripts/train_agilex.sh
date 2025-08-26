@@ -1,9 +1,9 @@
 
-cd /media/liuzhuoyang/new_vla/Rec_Diff_beta/LLM_policy
+cd /media/liuzhuoyang/new_vla/Rec_Tac_Diff_beta/LLM_policy
 
-export PYTHONPATH=/media/liuzhuoyang/new_vla/Rec_Diff_beta/LLM_policy:$PYTHONPATH
-export PYTHONPATH=/media/liuzhuoyang/new_vla/Rec_Diff_beta/LLM_policy/vlm:$PYTHONPATH
-export PYTHONPATH=/media/liuzhuoyang/new_vla/Rec_Diff_beta/LLM_policy/transformers:$PYTHONPATH
+export PYTHONPATH=/media/liuzhuoyang/new_vla/Rec_Tac_Diff_beta/LLM_policy:$PYTHONPATH
+export PYTHONPATH=/media/liuzhuoyang/new_vla/Rec_Tac_Diff_beta/LLM_policy/vlm:$PYTHONPATH
+export PYTHONPATH=/media/liuzhuoyang/new_vla/Rec_Tac_Diff_beta/LLM_policy/transformers:$PYTHONPATH
 
 export HF_HOME=/media/huggingface
 export HF_HUB_OFFLINE=1
@@ -18,6 +18,7 @@ FUTURE_ACTION_STEPS=0
 FREEZE_VISON=true
 FREEZE_LLM=false
 ACTION_TOKENIZER_EXIST=false
+ACTION_DIM=14
 USE_DIFF=true
 REPEATED_DIFFUSION_STEPS=4
 CLASS_DROPOUT_PROB=0.0
@@ -33,7 +34,7 @@ RECON_PC=false
 
 SETTING=Pretrain${PRETRAIN}_FreezeVis${FREEZE_VISON}_Window${FUTURE_ACTION_STEPS}_Diff${USE_DIFF}_Rec${USE_REC}ALL_Contrastive_Vislayer${LLM_VISION_LAYERS}_1024_0403_0818
 
-TASK=6tasks_selected_keyframe_nextpc_0806
+TASK=agilex_straw_insert_tac_0819
 BATCH_SIZE=8
 EPOCHS=300
 LEARNING_RATE=2e-5
@@ -45,11 +46,11 @@ MASTER_ADDR="10.200.64.222" # ifconfig
 NODE_RANK=0
 
 DATA_ROOT=/media/liuzhuoyang/data/rlbench/rlds
-EXP_ROOT=/media/liuzhuoyang/new_vla/Rec_Diff_beta/exp
+EXP_ROOT=/media/liuzhuoyang/new_vla/Rec_Tac_Diff_beta/exp
 
 torchrun --standalone --nnodes ${NODES} --nproc-per-node ${NUM_GPUS} scripts/train.py \
   --vla.type prism-dinosiglip-224px+oxe+diffusion \
-  --vla.data_mix rlbench \
+  --vla.data_mix agilex \
   --vla.base_vlm prism-dinosiglip-224px+7b \
   --vla.expected_world_size $((${NUM_GPUS} * ${NODES})) \
   --vla.per_device_batch_size ${BATCH_SIZE} \
@@ -65,7 +66,7 @@ torchrun --standalone --nnodes ${NODES} --nproc-per-node ${NUM_GPUS} scripts/tra
   --wandb_project one_model_vla_real \
   --wandb_entity liumail2023-peking-university \
   --save_interval 100 \
-  --action_dim 14 \
+  --action_dim ${ACTION_DIM} \
   --repeated_diffusion_steps ${REPEATED_DIFFUSION_STEPS} \
   --action_tokenizer_exist ${ACTION_TOKENIZER_EXIST} \
   --future_action_window_size ${FUTURE_ACTION_STEPS} \
@@ -78,7 +79,7 @@ torchrun --standalone --nnodes ${NODES} --nproc-per-node ${NUM_GPUS} scripts/tra
   --use_roi ${USE_ROI} \
   --recon_pointcloud ${RECON_PC} \
   --is_resume False \
-  --pretrained_checkpoint "/media/liuzhuoyang/new_vla/Rec_Diff_beta/pretrain-exp/exp_rtx_0812_Pretrainopenvla_FreezeVisfalse_Window0_Difftrue_Rectrue2d_Contrastive_Vislayer8_1024_0403_0815/checkpoints/step-022717-epoch-01-loss=1.4848.pt"
+  --pretrained_checkpoint "/media/liuzhuoyang/new_vla/Rec_Tac_Diff_beta/pretrain-exp/exp_rtx_0812_Pretrainopenvla_FreezeVisfalse_Window0_Difftrue_Rectrue2d_Contrastive_Vislayer8_1024_0403_0815/checkpoints/step-022717-epoch-01-loss=1.4848.pt"
   # --pretrained_checkpoint "/media/huggingface/hub/models--openvla--openvla-7b/snapshots/31f090d05236101ebfc381b61c674dd4746d4ce0"
   # --pretrained_checkpoint "/media/liuzhuoyang/new_vla/2D_VLA_beta/pretrain_exp/exp_rtx_dataset_4_freeze_vit_window0_huoshan_eve_pretrain/checkpoints/step-201072-epoch-01-loss=1.7223.pt"
   # --pretrained_checkpoint "/media/huggingface/hub/models--CogACT--CogACT-Base/snapshots/6550bf0992f162fc5d74f14ffee30771a9433363/checkpoints/CogACT-Base.pt"

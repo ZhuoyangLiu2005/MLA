@@ -174,6 +174,8 @@ def make_dataset_from_rlds(
         # add timestep info
         new_obs["timestep"] = tf.range(traj_len)
         new_obs["proprio"] = tf.cast(traj["observation"]["proprio"], tf.float32)
+        new_obs["gripper_xyz"] = tf.cast(traj["observation"]["gripper_xyz"], tf.float32)
+        
         if load_pointcloud is not None:
             new_obs["point_cloud"] = tf.cast(traj["observation"]["point_cloud"], tf.float32)
             new_obs["next_point_cloud"] = tf.cast(traj["observation"]["next_point_cloud"], tf.float32)
@@ -190,6 +192,8 @@ def make_dataset_from_rlds(
         traj = {
             "observation": new_obs,
             "task": task,
+            "tactile_right": tf.cast(traj["observation"]["tactile_right"], tf.float32),
+            "tactile_left": tf.cast(traj["observation"]["tactile_left"], tf.float32),
             "action": tf.cast(traj["action"], tf.float32),
             "dataset_name": tf.repeat(name, traj_len),
         }

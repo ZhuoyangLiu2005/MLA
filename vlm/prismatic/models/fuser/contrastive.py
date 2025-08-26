@@ -3,15 +3,15 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 def project_3d_to_2d_672_rlbench(
-    xyz_3d,                     # (B, N, 3) world 坐标
-    K, R, t,                    # PyRep格式的相机参数
-    image_size_orig=(224, 224), # 原始深度图分辨率
-    image_size_resize=(672, 672), # 目标分辨率
+    xyz_3d,                     
+    K, R, t,                    
+    image_size_orig=(224, 224), 
+    image_size_resize=(672, 672), 
     vision_strides={"patch_stride": 14, "conv_stride": 2},
 ):
     
-    scale_x = image_size_resize[1] / image_size_orig[1]  # 672/224 = 3.0
-    scale_y = image_size_resize[0] / image_size_orig[0]  # 672/224 = 3.0
+    scale_x = image_size_resize[1] / image_size_orig[1]  # 672/224 = 3
+    scale_y = image_size_resize[0] / image_size_orig[0]  # 672/224 = 3
     
     K_scaled = K.clone()
     K_scaled[0, 0] *= scale_x 
@@ -79,7 +79,7 @@ def project_3d_to_2d_672_metaworld(
     }
 
     if transform_key not in PC_TRANSFORM_TENSORS:
-        raise ValueError(f"未知的 transform_key: '{transform_key}'. 可用键为: {list(PC_TRANSFORM_TENSORS.keys())}")
+        raise ValueError(f"Unknown transform_key: '{transform_key}'. Available keys: {list(PC_TRANSFORM_TENSORS.keys())}")
     
     pc_transform_matrix = PC_TRANSFORM_TENSORS[transform_key].to(xyz_3d.device)
     xyz_3d_mujoco_frame = xyz_3d @ pc_transform_matrix
@@ -121,6 +121,57 @@ def project_3d_to_2d_672_metaworld(
     patch_idx = torch.stack([row, col], dim=-1)
     
     return patch_idx, valid
+
+def project_3d_to_2d_672_franka_right(
+    xyz_3d: torch.Tensor,
+    K: torch.Tensor,
+    R: torch.Tensor,
+    t: torch.Tensor,
+    image_size_orig: tuple = (480, 640),
+    image_size_resize: tuple = (672, 672),
+    vision_strides: dict = {"patch_stride": 14, "conv_stride": 2},
+):
+    
+    scale_x = image_size_resize[1] / image_size_orig[1]  # 672/224 = 3
+    scale_y = image_size_resize[0] / image_size_orig[0]  # 672/224 = 3
+    
+    K_scaled = K.clone()
+    K_scaled[0, 0] *= scale_x  # fx
+    K_scaled[1, 1] *= scale_y  # fy
+    K_scaled[0, 2] *= scale_x  # cx
+    K_scaled[1, 2] *= scale_y  # cy
+    
+    R_world_to_cam = R.T
+    t_world_to_cam = -R_world_to_cam @ t
+    
+    xyz_cam = xyz_3d @ R_world_to_cam.T + t_world_to_cam
+
+    uvw = xyz_cam @ K_scaled.T
+
+    z = uvw[..., 2:]
+    
+    xy = uvw[..., :2] / (z + 1e-6) 
+    
+    total_stride = vision_strides["patch_stride"] * vision_strides["conv_stride"] 
+
+    row = (xy[..., 1] / total_stride).floor().long() 
+    col = (xy[..., 0] / total_stride).floor().long() 
+    
+    patch_h = image_size_resize[0] // total_stride  
+    patch_w = image_size_resize[1] // total_stride  
+    
+    valid = (z.squeeze(-1) > 0) & \
+            (xy[..., 0] >= 0) & (xy[..., 0] < image_size_resize[1]) & \
+            (xy[..., 1] >= 0) & (xy[..., 1] < image_size_resize[0])
+
+    row = torch.clamp(row, 0, patch_h - 1)
+    col = torch.clamp(col, 0, patch_w - 1)
+    patch_idx = torch.stack([row, col], dim=-1)
+    
+    return patch_idx, valid
+
+
+
 
 
 class SceneLevelContrastiveLoss(nn.Module):
@@ -196,7 +247,7 @@ class TokenLevelContrastiveLoss(nn.Module):
         return token_contrastive_loss
     
     
-    
+# image-pointcloud contrastive module
 class CoordinateAwareContrastiveLoss(nn.Module):
     def __init__(self, feature_dim, projection_dim=256, temperature=0.07):
         super().__init__()
@@ -243,3 +294,45 @@ class CoordinateAwareContrastiveLoss(nn.Module):
         loss_img2pc = F.cross_entropy(logits.t(), labels)
         
         return (loss_pc2img + loss_img2pc) / 2
+    
+# tactile contrastive loss module
+class TactileContrastiveLoss(nn.Module):
+    def __init__(self, feature_dim, projection_dim=256, temperature=0.07):
+        super().__init__()
+        self.temperature = temperature
+        
+        # Define projection heads for each modality
+        self.tactile_projection_head = nn.Sequential(
+            nn.Linear(feature_dim, feature_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(feature_dim, projection_dim)
+        )
+        self.pointcloud_projection_head = nn.Sequential(
+            nn.Linear(feature_dim, feature_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(feature_dim, projection_dim)
+        )
+        self.image_projection_head = nn.Sequential(
+            nn.Linear(feature_dim, feature_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(feature_dim, projection_dim)
+        )
+
+    def forward(self, tac_features, pc_features, img_features, 
+                positive_pc_indices, linear_positive_img_indices):
+        if tac_features.shape[0] == 0:
+            return torch.tensor(0.0, device=tac_features.device, requires_grad=True)
+        tac_proj = F.normalize(self.tactile_projection_head(tac_features), p=2, dim=-1)
+        pc_proj = F.normalize(self.pointcloud_projection_head(pc_features), p=2, dim=-1)
+        img_proj = F.normalize(self.image_projection_head(img_features), p=2, dim=-1)
+        logits_tac_pc = torch.bmm(tac_proj, pc_proj.transpose(1, 2)) / self.temperature
+        
+        loss_tac_pc = F.cross_entropy(logits_tac_pc.view(-1, pc_proj.shape[1]), 
+                                      positive_pc_indices.view(-1))
+
+        logits_tac_img = torch.bmm(tac_proj, img_proj.transpose(1, 2)) / self.temperature
+
+        loss_tac_img = F.cross_entropy(logits_tac_img.view(-1, img_proj.shape[1]),
+                                       linear_positive_img_indices.view(-1))
+        
+        return (loss_tac_pc + loss_tac_img) / 2

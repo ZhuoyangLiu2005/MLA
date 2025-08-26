@@ -208,10 +208,14 @@ class HFCausalLLMBackbone(LLMBackbone, ABC):
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
         pc_token_indices: Optional[Tuple[int, int]] = None,
+        tac_token_indices: Optional[Tuple[int, int]] = None,
         img_token_indices: Optional[Tuple[int, int]] = None,
         patch_correspondence_indices: Optional[Tuple[int, int]] = None,
         correspondence_valid_mask: Optional[Tuple[int, int]] = None,
+        positive_pc_indices_for_tac: Optional[torch.Tensor] = None,
+        linear_positive_img_indices_for_tac: Optional[torch.Tensor] = None,
         compute_token_contrastive_loss: bool = False,
+        compute_tactile_contrastive_loss: bool = False,
     ) -> CausalLMOutputWithPast:
         output: CausalLMOutputWithPast = self.llm(
             input_ids=input_ids,
@@ -226,8 +230,12 @@ class HFCausalLLMBackbone(LLMBackbone, ABC):
             return_dict=return_dict,
             pc_token_indices=pc_token_indices,
             img_token_indices=img_token_indices,
+            tac_token_indices=tac_token_indices,
             patch_correspondence_indices=patch_correspondence_indices,
             correspondence_valid_mask=correspondence_valid_mask,
+            positive_pc_indices_for_tac=positive_pc_indices_for_tac,
+            linear_positive_img_indices_for_tac=linear_positive_img_indices_for_tac,
             compute_token_contrastive_loss=compute_token_contrastive_loss,
+            compute_tactile_contrastive_loss=compute_tactile_contrastive_loss,
         )
         return output
