@@ -239,7 +239,7 @@ Specifically, it should be mentioned that the hyperparameters can be set as foll
 | gen_pc              | false | false | true |
 | gen_tac              | false | false | true |
 
-- Note: if you need to change the number of views that be loaded from the RLDS dataset, you should modify the hardcode in `vla/datasets/datasets.py `:
+- Note: if you need to change the number of views that be loaded from the RLDS dataset, you should modify the hardcode of `load_camera_views` in `vla/datasets/datasets.py `:
   
   ```python
   class RLDSDataset(IterableDataset):
