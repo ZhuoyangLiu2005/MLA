@@ -3,16 +3,15 @@ requires = ["setuptools"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "cogact"
+name = "mla"
 authors = [
-    {name = "Qixiu Li", email="liqx23@mails.tsinghua.edu.cn"},
-    {name = "Yaobo Liang", email="yalia@microsoft.com"},
-    {name = "Zeyu Wang", email="skyw95357@gmail.com"}
+    {name = "Zhuoyang Liu", email="zhuoyangliu6@gmail.com"},
+    {name = "Jiaming Liu", email="jiamingliu@stu.pku.edu.cn"},
 ]
-description = "CogACT: A Foundational Vision-Language-Action Model for Synergizing Cognition and Action in Robotic Manipulation"
+description = "MLA: A Multisensory Language-Action Model for Multimodal Understanding and Forecasting in Robotic Manipulation"
 version = "0.0.1"
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.10"
 keywords = ["vision-language-actions models", " robotic manipulation", "multimodal pretraining", "robot learning", "generative models"]
 license = {file = "LICENSE"}
 classifiers = [
@@ -44,11 +43,11 @@ dependencies = [
     "sentencepiece==0.1.99",
     "timm==0.9.10",
     "tokenizers==0.19.1",
-    "torch>=2.2.0",
-    "torchvision>=0.16.0",
-    "torchaudio",
+    "torch==2.5.1",
+    "torchvision==0.20.1",
+    "torchaudio==2.5.1",
     "transformers==4.40.1",
-    "wandb",
+    "wandb==0.19.0",
     "tensorflow==2.15.0",
     "tensorflow_datasets==4.9.3",
     "tensorflow_graphics==2021.12.3",
@@ -75,7 +74,7 @@ where = ["."]
 exclude = ["cache"]
 
 [tool.setuptools.package-data]
-"cogact" = ["py.typed"]
+"hybridvla" = ["py.typed"]
 
 [tool.black]
 line-length = 121

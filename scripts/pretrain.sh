@@ -1,53 +1,46 @@
 
-cd /media/liuzhuoyang/new_vla/Rec_Diff_beta/LLM_policy
-export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
-export HF_HOME=/media/huggingface
+cd /path/to/MLA
 
-export PYTHONPATH=/media/liuzhuoyang/new_vla/Rec_Diff_beta/LLM_policy:$PYTHONPATH
-export PYTHONPATH=/media/liuzhuoyang/new_vla/Rec_Diff_beta/LLM_policy/vlm:$PYTHONPATH
-export PYTHONPATH=/media/liuzhuoyang/new_vla/Rec_Diff_beta/LLM_policy/transformers:$PYTHONPATH
-
-export NCCL_DEBUG=INFO
-export NCCL_SOCKET_IFNAME=eth
-export NCCL_P2P_LEVEL=NVL
-export NCCL_TIMEOUT=7200
-
-export HF_HUB_OFFLINE=1
-export TRANSFORMERS_OFFLINE=1
-export TIMM_OFFLINE=1
+export PYTHONPATH=/path/to/MLA:$PYTHONPATH
 
 # for debug
-# export WANDB_MODE=offline
+export WANDB_MODE=offline
 
 # training settings
 FUTURE_ACTION_STEPS=0
-FREEZE_VISON=false
+FREEZE_VISON=true
 FREEZE_LLM=false
 ACTION_TOKENIZER_EXIST=false
+ACTION_DIM=7
 USE_DIFF=true
 REPEATED_DIFFUSION_STEPS=4
 CLASS_DROPOUT_PROB=0.0
-PRETRAIN=Openvla
-USE_POINTCLOUD=false
+PRETRAIN=vlm
+
+USE_POINTCLOUD=false # no point cloud in RTX dataset
+USE_TAC=false # no tactile in simulator
 USE_CONTRASTIVE=false
 LLM_VISION_LAYERS=8
-USE_REC=false
-RECON_IMG=false
+USE_GEN=false
+GEN_IMG=false
 USE_ROI=false
-RECON_PC=false
+GEN_PC=false
+GEN_TAC=false
 
-SETTING=Pretrain${PRETRAIN}_FreezeVis${FREEZE_VISON}_Window${FUTURE_ACTION_STEPS}_Diff${USE_DIFF}_Rec${USE_REC}2d_Contrastive_Vislayer${LLM_VISION_LAYERS}_1024_0403_0818
+SETTING=Pretrain${PRETRAIN}_FreezeVis${FREEZE_VISON}_Window${FUTURE_ACTION_STEPS}_Diff${USE_DIFF}_PC${USE_POINTCLOUD}_Contrastive${USE_CONTRASTIVE}_Gen${USE_GEN}_Vislayer${LLM_VISION_LAYERS}
 
-TASK=rtx_0812
+TASK=name_of_your_task
 BATCH_SIZE=8
-EPOCHS=10
+EPOCHS=300
 LEARNING_RATE=2e-5
 
-NUM_GPUS=8
-NODES=4
-MASTER_ADDR="10.200.64.126" # 122: 10.200.64.219, 241: 10.200.64.126
-NODE_RANK=3
-LOG_DIR="/media/liuzhuoyang/new_vla/Rec_Diff_beta/pretrain-exp/exp_${TASK}_${SETTING}/logs_pretrain"
+export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
+NUM_GPUS=8 # gpus per machine
+NODES=1
+MASTER_ADDR="" # use $ifconfig$ to get
+NODE_RANK=0
+
+LOG_DIR="/path/to/MLA/logs_pretrain"
 mkdir -p $LOG_DIR
 if [ $NODE_RANK -eq 0 ]; then
   LOG_FILE="$LOG_DIR/main.log"
@@ -55,8 +48,8 @@ else
   LOG_FILE="$LOG_DIR/node_${NODE_RANK}.log"
 fi
 
-DATA_ROOT=/media/liuzhuoyang/data/rtx/rlds
-EXP_ROOT=/media/liuzhuoyang/new_vla/Rec_Diff_beta/pretrain-exp
+DATA_ROOT=/path/to/your/datasets
+EXP_ROOT=/path/to/MLA/exp
 
 torchrun --nnodes $NODES --nproc-per-node $NUM_GPUS --node_rank=$NODE_RANK --master_addr=${MASTER_ADDR} --master_port=29501 scripts/train.py \
   --vla.type prism-dinosiglip-224px+oxe+diffusion \
@@ -73,10 +66,10 @@ torchrun --nnodes $NODES --nproc-per-node $NUM_GPUS --node_rank=$NODE_RANK --mas
   --run_root_dir ${EXP_ROOT} \
   --run_id exp_${TASK}_${SETTING} \
   --image_aug false \
-  --wandb_project one_model_vla_pretrain \
-  --wandb_entity liumail2023-peking-university \
+  --wandb_project mla \
+  --wandb_entity <your-w&b-account> \
   --save_interval 1 \
-  --action_dim 7 \
+  --action_dim ${ACTION_DIM} \
   --repeated_diffusion_steps ${REPEATED_DIFFUSION_STEPS} \
   --action_tokenizer_exist ${ACTION_TOKENIZER_EXIST} \
   --future_action_window_size ${FUTURE_ACTION_STEPS} \
@@ -89,5 +82,6 @@ torchrun --nnodes $NODES --nproc-per-node $NUM_GPUS --node_rank=$NODE_RANK --mas
   --use_roi ${USE_ROI} \
   --recon_pointcloud ${RECON_PC} \
   --is_resume False \
-  --pretrained_checkpoint "/media/huggingface/hub/models--openvla--openvla-7b/snapshots/31f090d05236101ebfc381b61c674dd4746d4ce0" \
   > $LOG_FILE 2>&1
+# --pretrained_checkpoint "/media/huggingface/hub/models--openvla--openvla-7b/snapshots/31f090d05236101ebfc381b61c674dd4746d4ce0" \
+  

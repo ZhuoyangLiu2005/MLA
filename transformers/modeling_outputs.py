@@ -704,7 +704,7 @@ class CausalLMOutputWithPast(ModelOutput):
     """
 
     loss: Optional[torch.FloatTensor] = None
-    contrastive_loss: Optional[torch.FloatTensor] = None
+    img_pc_contrastive_loss: Optional[torch.FloatTensor] = None
     tactile_contrastive_loss: Optional[torch.FloatTensor] = None
     logits: torch.FloatTensor = None
     all_logits_for_action : Optional[torch.FloatTensor] = None

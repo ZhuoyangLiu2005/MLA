@@ -1126,7 +1126,7 @@ class LlamaModel(LlamaPreTrainedModel):
 
         return causal_mask
 
-from prismatic.models.fuser.contrastive import CoordinateAwareContrastiveLoss, TactileContrastiveLoss
+from models.mla.fuser import CoordinateAwareContrastiveLoss, TactileContrastiveLoss
 class LlamaForCausalLM(LlamaPreTrainedModel):
     _tied_weights_keys = ["lm_head.weight"]
 
@@ -1269,20 +1269,20 @@ class LlamaForCausalLM(LlamaPreTrainedModel):
             loss = loss_fct(shift_logits, shift_labels)
             
         # compute contrastive loss of two modalities
-        contrastive_loss = None
+        img_pc_contrastive_loss = None
         if self.training and compute_token_contrastive_loss:
             hidden_state_layer8 = outputs.hidden_states[8]
             pc_start, pc_end = pc_token_indices
             img_start, img_end = img_token_indices
             pc_features = hidden_state_layer8[:, pc_start:pc_end, :]
             img_features = hidden_state_layer8[:, img_start:img_end, :]
-            contrastive_loss = self.coordinate_aware_contrastive_loss_module(
+            img_pc_contrastive_loss = self.coordinate_aware_contrastive_loss_module(
                 image_features=img_features,
                 pointcloud_features=pc_features,
                 patch_indices=patch_correspondence_indices,
                 valid_mask=correspondence_valid_mask
             )
-            loss += contrastive_loss   
+            loss += img_pc_contrastive_loss   
         
         tactile_contrastive_loss = None
         if self.training and compute_tactile_contrastive_loss:
@@ -1309,7 +1309,7 @@ class LlamaForCausalLM(LlamaPreTrainedModel):
         return CausalLMOutputWithPast(
             loss=loss,
             logits=logits,
-            contrastive_loss=contrastive_loss,
+            img_pc_contrastive_loss=img_pc_contrastive_loss,
             tactile_contrastive_loss=tactile_contrastive_loss,
             past_key_values=outputs.past_key_values,
             hidden_states=outputs.hidden_states,

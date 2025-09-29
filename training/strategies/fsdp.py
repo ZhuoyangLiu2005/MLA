@@ -30,11 +30,11 @@ from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.optim import AdamW
 from transformers.optimization import get_constant_schedule, get_cosine_schedule_with_warmup
 
-from vlm.prismatic.models.vlms import PrismaticVLM
-from vlm.prismatic.overwatch import initialize_overwatch
+from models.vlm import PrismaticVLM
+from models.mla import MLA
 
-from vla import CogACT
-from training.strategies.base_strategy_cogact import TrainingStrategy
+from util.overwatch import initialize_overwatch
+from training.strategies.base_strategy_mla import TrainingStrategy
 
 # Initialize Overwatch =>> Wraps `logging.Logger`
 overwatch = initialize_overwatch(__name__)
@@ -43,7 +43,7 @@ overwatch = initialize_overwatch(__name__)
 class FSDPStrategy(TrainingStrategy):
     def __init__(
         self,
-        vlm: Union[PrismaticVLM, CogACT],
+        vlm: Union[PrismaticVLM, MLA],
         device_id: int,
         stage: str,
         epochs: int,

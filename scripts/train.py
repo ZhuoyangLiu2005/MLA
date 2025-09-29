@@ -26,38 +26,33 @@ import draccus
 import torch
 import torch.distributed as dist
 import yaml
+# from omegaconf import OmegaConf
 import wandb
 
 
-from vlm.prismatic.overwatch import initialize_overwatch
-from vlm.prismatic.util import set_global_seed
-from vlm.prismatic.vla import get_vla_dataset_and_collator
-from vlm.prismatic.vla.datasets.rlds.utils.data_utils import save_dataset_statistics
+from util.overwatch import initialize_overwatch
+from util import set_global_seed
+from vla import get_vla_dataset_and_collator, save_dataset_statistics, ActionTokenizer
 
 from training import VLAMetrics, get_train_strategy
 from conf import VLAConfig, VLARegistry
-from vla import load, load_vla, load_openvla
-from vla import CogACT
-
-from vlm.prismatic.vla.action_tokenizer import ActionTokenizer
+from models import load, load_vla, load_openvla
+from models import MLA
 
 from typing import Dict, Optional, Sequence, List
 import transformers
-import tokenizers
 # Sane Defaults
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
-
 # Initialize Overwatch =>> Wraps `logging.Logger`
 overwatch = initialize_overwatch(__name__)
-
 
 @dataclass
 class TrainConfig:
 
     # VLAConfig (`conf/vla.py`); override with --vla.type `VLARegistry.<VLA>.vla_id`
     vla: VLAConfig = field(
-        default_factory=VLAConfig.get_choice_class(VLARegistry.EXP_A2PVLA_FINETUNE.vla_id)
+        default_factory=VLAConfig.get_choice_class(VLARegistry.EXP_MLA_FINETUNE.vla_id)
     )
 
     # Directory Paths
@@ -103,12 +98,14 @@ class TrainConfig:
     use_contrastive: bool = False
     llm_vision_layers: int = 8
     use_tactile: bool = False
+    camera_name: str = ""
     
-    # reconstruction
-    use_reconstruction: bool = False
-    recon_image: bool = False
+    # generation
+    use_generation: bool = False
+    gen_image: bool = False
     use_roi: bool = False
-    recon_pointcloud: bool = False
+    gen_pointcloud: bool = False
+    gen_tactile: bool = False
     
 
     def __post_init__(self) -> None:
@@ -159,7 +156,7 @@ def smart_tokenizer_and_embedding_resize(
 
 @draccus.wrap()
 def train(cfg: TrainConfig) -> None:
-    overwatch.info("CogACT-VLA Training :: Warming Up")
+    overwatch.info("MLA Training :: Warming Up")
 
     # Note => Under `torchrun` initializing `overwatch` will automatically set up `torch.distributed`
     torch.cuda.set_device(device_id := overwatch.local_rank())
@@ -179,7 +176,7 @@ def train(cfg: TrainConfig) -> None:
 
     # Start =>> Build Directories and Set Randomness
     overwatch.info('"Do or do not; there is no try."', ctx_level=1)
-    hf_token = "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" ## cfg.hf_token.read_text().strip() if isinstance(cfg.hf_token, Path) else os.environ[cfg.hf_token]
+    hf_token = cfg.hf_token ## cfg.hf_token.read_text().strip() if isinstance(cfg.hf_token, Path) else os.environ[cfg.hf_token]
     worker_init_fn = set_global_seed(cfg.seed, get_worker_init_fn=True)
     os.makedirs(run_dir := (cfg.run_root_dir / cfg.run_id), exist_ok=True)
     os.makedirs(cfg.run_root_dir / cfg.run_id / "checkpoints", exist_ok=True)
@@ -219,9 +216,11 @@ def train(cfg: TrainConfig) -> None:
                         use_pointcloud=cfg.use_pointcloud,
                         use_tactile=cfg.use_tactile,
                         use_contrastive=cfg.use_contrastive,
-                        use_reconstruction=cfg.use_reconstruction,
-                        recon_image=cfg.recon_image,
-                        recon_pointcloud=cfg.recon_pointcloud,
+                        use_generation=cfg.use_generation,
+                        gen_image=cfg.gen_image,
+                        use_roi=cfg.use_roi,
+                        gen_pointcloud=cfg.gen_pointcloud,
+                        gen_tactile=cfg.gen_tactile,
                         llm_vision_layers=cfg.llm_vision_layers,
                     )
     elif cfg.pretrained_checkpoint is not None and 'openvla' in cfg.pretrained_checkpoint and 'Pretrainopenvla' not in cfg.pretrained_checkpoint:
@@ -233,15 +232,17 @@ def train(cfg: TrainConfig) -> None:
                            use_pointcloud=cfg.use_pointcloud,
                            use_tactile=cfg.use_tactile,
                            use_contrastive=cfg.use_contrastive,
-                           use_reconstruction=cfg.use_reconstruction,
-                           recon_image=cfg.recon_image,
-                           recon_pointcloud=cfg.recon_pointcloud,
+                           use_generation=cfg.use_generation,
+                           gen_image=cfg.gen_image,
+                           use_roi=cfg.use_roi,
+                           gen_pointcloud=cfg.gen_pointcloud,
+                           gen_tactile=cfg.gen_tactile,
                         )
         overwatch.info("Creating VLA from Base VLM")
         if cfg.use_ema:
             overwatch.info("Creating EMA for Diffusion")
         action_tokenizer = ActionTokenizer(vlm.llm_backbone.get_tokenizer())
-        vla = CogACT(vlm, 
+        vla = MLA(vlm, 
                     action_tokenizer,
                     action_dim=cfg.action_dim,
                     future_action_window_size=cfg.future_action_window_size,
@@ -251,9 +252,11 @@ def train(cfg: TrainConfig) -> None:
                     use_pointcloud=cfg.use_pointcloud,
                     use_tactile=cfg.use_tactile,
                     use_contrastive=cfg.use_contrastive,
-                    use_reconstruction = cfg.use_reconstruction,
-                    recon_image=cfg.recon_image,
-                    recon_pointcloud=cfg.recon_pointcloud,
+                    use_generation = cfg.use_generation,
+                    gen_image=cfg.gen_image,
+                    use_roi=cfg.use_roi,
+                    gen_pointcloud=cfg.gen_pointcloud,
+                    gen_tactile=cfg.gen_tactile,
                     llm_vision_layers=cfg.llm_vision_layers,
                 )
         del vlm
@@ -267,16 +270,18 @@ def train(cfg: TrainConfig) -> None:
                 use_pointcloud=cfg.use_pointcloud,
                 use_tactile=cfg.use_tactile,
                 use_contrastive=cfg.use_contrastive,
-                use_reconstruction=cfg.use_reconstruction,
-                recon_image=cfg.recon_image,
-                recon_pointcloud=cfg.recon_pointcloud,
+                use_generation=cfg.use_generation,
+                gen_image=cfg.gen_image,
+                use_roi=cfg.use_roi,
+                gen_pointcloud=cfg.gen_pointcloud,
+                gen_tactile=cfg.gen_tactile,
                 llm_vision_layers=cfg.llm_vision_layers,
             )
         overwatch.info("Creating VLA from Base VLM")
         if cfg.use_ema:
             overwatch.info("Creating EMA for Diffusion")
         action_tokenizer = ActionTokenizer(vlm.llm_backbone.get_tokenizer())
-        vla = CogACT(vlm, 
+        vla = MLA(vlm, 
                     action_tokenizer,
                     action_dim=cfg.action_dim,
                     future_action_window_size=cfg.future_action_window_size,
@@ -286,9 +291,11 @@ def train(cfg: TrainConfig) -> None:
                     use_pointcloud=cfg.use_pointcloud,
                     use_tactile=cfg.use_tactile,
                     use_contrastive=cfg.use_contrastive,
-                    use_reconstruction = cfg.use_reconstruction,
-                    recon_image=cfg.recon_image,
-                    recon_pointcloud=cfg.recon_pointcloud,
+                    use_generation = cfg.use_generation,
+                    gen_image=cfg.gen_image,
+                    use_roi=cfg.use_roi,
+                    gen_pointcloud=cfg.gen_pointcloud,
+                    gen_tactile=cfg.gen_tactile,
                     llm_vision_layers=cfg.llm_vision_layers,
                 )
         del vlm
@@ -300,16 +307,12 @@ def train(cfg: TrainConfig) -> None:
         assert param.dtype == torch.float32, f"Loaded VLM parameter not in full precision: {param}"
 
     # Determine training "stage" based on frozen vs unfrozen parameters --> supports different fine-tuning schemes!
-    if not cfg.vla.freeze_vision_tower and not cfg.vla.freeze_llm_backbone:
-        stage = "full-finetune"  # Full fine-tuning
-    elif cfg.vla.freeze_vision_tower and not cfg.vla.freeze_llm_backbone:
-        stage = "finetune"  # Frozen vision encoder
-    elif cfg.vla.freeze_vision_tower and cfg.vla.freeze_llm_backbone:
-        stage = "align"  # Fine-tuning projector
-    elif not cfg.vla.freeze_vision_tower and cfg.vla.freeze_llm_backbone and cfg.vla.unfreeze_last_llm_layer:
-        stage = "vla-sandwich-train"  # Fine-tuning vision encoder, projector, and LLM last layer
-    elif cfg.vla.freeze_vision_tower and cfg.vla.freeze_llm_backbone and cfg.vla.unfreeze_last_llm_layer:
-        stage = "vla-last-layer-train"  # Fine-tuning LLM last layer only
+    if not cfg.vla.freeze_vision_tower and not cfg.vla.freeze_llm_backbone and not cfg.use_generation:
+        stage = "pretrain"  # Pre-training with all components trainable
+    elif cfg.vla.freeze_vision_tower and not cfg.vla.freeze_llm_backbone and not cfg.use_generation:
+        stage = "finetune"  # Frozen vision tower 
+    elif cfg.vla.freeze_vision_tower and not cfg.vla.freeze_llm_backbone and cfg.use_generation:
+        stage = "post-training"  # Post-training with future generation
     else:
         raise ValueError(
             "Weight freezing configuration not supported. VLA config has the following parameters: "
@@ -408,9 +411,11 @@ def train(cfg: TrainConfig) -> None:
         use_pointcloud=cfg.use_pointcloud,
         use_tactile=cfg.use_tactile,
         use_contrastive=cfg.use_contrastive,
-        use_reconstruction=cfg.use_reconstruction,
-        recon_image=cfg.recon_image,
-        recon_pointcloud=cfg.recon_pointcloud,
+        camera_name=cfg.camera_name,
+        use_generation=cfg.use_generation,
+        gen_image=cfg.gen_image,
+        gen_pointcloud=cfg.gen_pointcloud,
+        gen_tactile=cfg.gen_tactile,
         repeated_diffusion_steps = cfg.repeated_diffusion_steps,
     )
 
@@ -425,4 +430,10 @@ def train(cfg: TrainConfig) -> None:
 
 
 if __name__ == "__main__":
+    # import argparse
+    # parser = argparse.ArgumentParser()
+    # parser.add_argument("--config", type=str, required=True)
+    # args = parser.parse_args()
+    # cfg = OmegaConf.load(args.config)
+    # train_cfg = OmegaConf.to_object(cfg)
     train()

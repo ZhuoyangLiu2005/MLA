@@ -90,48 +90,10 @@ class Exp_SigLIP_224px_Bridge(VLAConfig):
 
     train_strategy: str = "fsdp-full-shard"
 
-
-# === CogACT-VLA Pretraining Configs ===
-
 @dataclass
-class Exp_CogACT_OXE_Magic_Soup_Plus_Minus(Exp_SigLIP_224px_Bridge):
+class Exp_MLA_Finetune(Exp_SigLIP_224px_Bridge):
     vla_id: str = "prism-dinosiglip-224px+oxe+diffusion"
     base_vlm: Union[str, Path] = "prism-dinosiglip-224px+7b"
-
-    # data_mix: str = "oxe_magic_soup_plus"
-    data_mix: str = "oxe_magic_soup_plus_minus"
-    shuffle_buffer_size: int = 10_000
-    expected_world_size: int = 1
-    global_batch_size: int = 256
-    per_device_batch_size: int = 16
-    max_grad_norm: float = 1.0
-    learning_rate: float = 2e-5
-    freeze_vision_tower: bool = True
-    freeze_llm_backbone: bool = False
-
-    epochs: int = 100
-
-@dataclass
-class Exp_EVEVLA_Finetune(Exp_SigLIP_224px_Bridge):
-    vla_id: str = "prism-eve-672px+oxe"
-    base_vlm: Union[str, Path] = "prism-eve-672px+7b"
-
-    data_mix: str = "rlbench"
-    shuffle_buffer_size: int = 10_000
-    expected_world_size: int = 1
-    global_batch_size: int = 256
-    per_device_batch_size: int = 16
-    max_grad_norm: float = 1.0
-    learning_rate: float = 2e-5
-    freeze_vision_tower: bool = False # full-finetune
-    freeze_llm_backbone: bool = False
-
-    epochs: int = 100
-
-@dataclass
-class Exp_A2PVLA_Finetune(Exp_SigLIP_224px_Bridge):
-    vla_id: str = "prism-a2p-pointcloud+oxe"
-    base_vlm: Union[str, Path] = "prism-a2p-pointcloud+7b"
 
     data_mix: str = "rlbench"
     shuffle_buffer_size: int = 10_000
@@ -150,13 +112,9 @@ class Exp_A2PVLA_Finetune(Exp_SigLIP_224px_Bridge):
 class VLARegistry(Enum):
     # Sanity Check Configurations =>> BridgeV2
     SIGLIP_224PX_MX_BRIDGE = Exp_SigLIP_224px_Bridge
-
-    # === CogACT-VLA Pretraining Configs ===
-    EXP_COGACT_OXE_MAGIC_SOUP_PLUS_MINUS = Exp_CogACT_OXE_Magic_Soup_Plus_Minus
     
-    EXP_EVEVLA_FINETUNE = Exp_EVEVLA_Finetune
-    
-    EXP_A2PVLA_FINETUNE = Exp_A2PVLA_Finetune
+    # === MLA Finetuning Configs 
+    EXP_MLA_FINETUNE = Exp_MLA_Finetune
 
     @property
     def vla_id(self) -> str:

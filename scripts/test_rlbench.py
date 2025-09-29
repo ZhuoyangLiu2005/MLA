@@ -20,7 +20,7 @@ import open3d as o3d
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 
-from load import load_vla
+from load_mla import load_vla
 import torch
 from PIL import Image
 
