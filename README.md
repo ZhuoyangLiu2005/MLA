@@ -7,7 +7,7 @@
 
 [🌐**Project Page**](https://github.com/ZhuoyangLiu2005/MLA) | [✍️**Paper(Arxiv)**](https://github.com/ZhuoyangLiu2005/MLA) | [🎥**Demo**](https://github.com/ZhuoyangLiu2005/MLA)
 
-Zhuoyang Liu, Jiaming Liu, Jiadong Xu, Nuowei Han, Chenyang Gu, Hao Chen, Kaichen zhou, Renrui Zhang, Kai Chin Hsieh, Kun Wu, Zhengping Che, Jian Tang, Shanghang Zhang
+Zhuoyang Liu*, Jiaming Liu*, Jiadong Xu, Nuowei Han, Chenyang Gu, Hao Chen, Kaichen zhou, Renrui Zhang, Kai Chin Hsieh, Kun Wu, Zhengping Che, Jian Tang, Shanghang Zhang
 
 </div>
 
