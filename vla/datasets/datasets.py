@@ -214,7 +214,7 @@ class RLDSDataset(IterableDataset):
         per_dataset_kwargs, weights = get_oxe_dataset_kwargs_and_weights(
             self.data_root_dir,
             mixture_spec,
-            load_camera_views=("primary", "next_primary", "wrist_right"), # "primary", "wrist", "secondary"
+            load_camera_views=("primary", "next_primary"), # "primary", "wrist", "secondary"
             load_depth=False,
             load_proprio=False,
             load_language=True,
