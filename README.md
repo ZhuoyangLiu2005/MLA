@@ -265,6 +265,3 @@ Specifically, it should be mentioned that the hyperparameters can be set as foll
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
-```
-
-```
