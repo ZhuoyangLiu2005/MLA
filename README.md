@@ -13,7 +13,7 @@ Zhuoyang Liu*, Jiaming Liu*, Jiadong Xu, Nuowei Han, Chenyang Gu, Hao Chen, Kaic
 
 ## ✨ News ✨
 
-- [2025/10/01] MLA is now live on arXiv! The pre-trained checkpoint on a large-scale robotic dataset has also been released.🚀
+- [2025/10/01] MLA is now live on arXiv! The pre-trained checkpoint on a large-scale robotic dataset will be released soon.🚀
 - [2025/10/01] The training config and script is released now!🚀
 
 ## 📦 Installation
@@ -60,11 +60,6 @@ Our code is built based on [OpenVLA](https://github.com/openvla/openvla) and [Hy
 - `vla`: from openvla's vla structure, including action tokenizer, etc.
 
 ## 💡Getting Started
-
-We release our pretrained model's parameters as follows:
-
-- [Robotic Large-Scale Pretrained Checkpoint](https://pan.baidu.com/s/134S9y8UwoNlyw3yUKozbRw?pwd=1spu)
-- [Post-trained Checkpoint](https://pan.baidu.com/s/1f5zpPKoAJDRIHFIH602Bqg?pwd=3ca1)
 
 Our model requires PIL image and text prompt as input, please refer to `scripts/test_rlbench.py` for the minimal inference, if you want to directly test on RLBench benchmark, you can refer to the following script:
 
