@@ -13,8 +13,8 @@ Zhuoyang Liu*, Jiaming Liu*, Jiadong Xu, Nuowei Han, Chenyang Gu, Hao Chen, Kaic
 
 ## ✨ News ✨
 
-- [2025/09/30] MLA is now live on arXiv! The pre-trained checkpoint on a large-scale robotic dataset has also been released.🚀
-- [2025/09/30] The training config and script is released now!🚀
+- [2025/10/01] MLA is now live on arXiv! The pre-trained checkpoint on a large-scale robotic dataset has also been released.🚀
+- [2025/10/01] The training config and script is released now!🚀
 
 ## 📦 Installation
 
