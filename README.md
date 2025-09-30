@@ -11,6 +11,11 @@ Zhuoyang Liu*, Jiaming Liu*, Jiadong Xu, Nuowei Han, Chenyang Gu, Hao Chen, Kaic
 
 </div>
 
+![](assets/model_0917.png)
+We introduce a multisensory language–action (MLA) model that collaboratively perceives heterogeneous sensory modalities and predicts future multisensory objectives to facilitate physical world modeling.
+Specifically, to enhance perceptual representations, we propose an encoder-free multimodal alignment scheme that innovatively repurposes the large language model itself as a perception module, directly interpreting multimodal cues by aligning 2D images, 3D point clouds, and tactile tokens through positional correspondence.
+To further enhance MLA’s understanding of physical dynamics, we design a future multisensory generation post-training strategy that enables MLA to reason about semantic, geometric, and interaction information, providing more robust conditions for action generation.
+
 ## ✨ News ✨
 
 - [2025/10/01] MLA is now live on arXiv! The pre-trained checkpoint on a large-scale robotic dataset will be released soon.🚀
