@@ -5,7 +5,7 @@
 ![Python](https://img.shields.io/badge/python-3670A0?style=for-the-badge&logo=python&logoColor=ffdd54)
 ![PyTorch](https://img.shields.io/badge/PyTorch-%23EE4C2C.svg?style=for-the-badge&logo=PyTorch&logoColor=white)
 
-[🌐**Project Page**](https://github.com/ZhuoyangLiu2005/MLA) | [✍️**Paper(Arxiv)**](https://github.com/ZhuoyangLiu2005/MLA) | [🎥**Demo**](https://github.com/ZhuoyangLiu2005/MLA)
+[🌐**Project Page**](https://sites.google.com/view/open-mla) | [✍️**Paper(Arxiv)**](https://github.com/ZhuoyangLiu2005/MLA) | [🎥**Demo**](https://sites.google.com/view/open-mla)
 
 Zhuoyang Liu*, Jiaming Liu*, Jiadong Xu, Nuowei Han, Chenyang Gu, Hao Chen, Kaichen Zhou, Renrui Zhang, Kai Chin Hsieh, Kun Wu, Zhengping Che, Jian Tang, Shanghang Zhang
 
