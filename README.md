@@ -21,6 +21,7 @@ To further enhance MLA’s understanding of physical dynamics, we design a futur
 - [2025/10/07] The pre-trained and fine-tuned checkpoint has been released! 
 - [2025/09/30] MLA is now live on arXiv! The pre-trained checkpoint on a large-scale robotic dataset will be released soon.🚀
 - [2025/09/30] The training config and script is released now!🚀
+- [2025/11/3] The pre-trained and post-trained checkpoints are available on Huggingface now!🚀
 
 ## 📦 Installation
 
@@ -69,8 +70,8 @@ Our code is built based on [OpenVLA](https://github.com/openvla/openvla) and [Hy
 
 We release our pretrained model's parameters as follows:
 
-- [Robotic Large-Scale Pretrained Checkpoint]( https://pan.baidu.com/s/19-c_WGSMKm8Yk6FhnS-_Yg?pwd=vxwe)
-- [Post-trained Checkpoint](https://pan.baidu.com/s/1wrVGQbifmCxGB82jpEcwgA?pwd=wcyx)
+- Robotic Large-Scale Pretrained Checkpoint: [Hugging Face](https://huggingface.co/miniFranka/MLA_pretrain), [Baidu Netdisk](https://pan.baidu.com/s/19-c_WGSMKm8Yk6FhnS-_Yg?pwd=vxwe)
+- Post-trained Checkpoint: [Hugging Face](https://huggingface.co/miniFranka/MLA_RLBench_post), [Baidu Netdisk](https://pan.baidu.com/s/1wrVGQbifmCxGB82jpEcwgA?pwd=wcyx)
 
 Our model requires PIL image and text prompt as input, please refer to `scripts/test_rlbench.py` for the minimal inference, if you want to directly test on RLBench benchmark, you can refer to the following script:
 
