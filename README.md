@@ -30,6 +30,7 @@ We recommend using [Miniconda](https://docs.conda.io/en/latest/miniconda.html) a
 
 ```bash
 conda create --name robo-mla python=3.10
+conda activate robo-mla
 ```
 
 Next, clone our repo and install the required packages with the following commands:
