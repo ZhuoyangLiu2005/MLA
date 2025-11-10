@@ -18,10 +18,11 @@ To further enhance MLA’s understanding of physical dynamics, we design a futur
 
 ## ✨ News ✨
 
+- [2025/11/3] The pre-trained and post-trained checkpoints are available on Huggingface now!🚀
 - [2025/10/07] The pre-trained and fine-tuned checkpoint has been released! 
 - [2025/09/30] MLA is now live on arXiv! The pre-trained checkpoint on a large-scale robotic dataset will be released soon.🚀
 - [2025/09/30] The training config and script is released now!🚀
-- [2025/11/3] The pre-trained and post-trained checkpoints are available on Huggingface now!🚀
+
 
 ## 📦 Installation
 
